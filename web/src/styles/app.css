@@ -162,9 +162,21 @@ button, input, select {
     #e3ecf6 80%,
     #eee5f4 100%
   );
+  background-size: 200% 200%;
+  background-position: 0% 50%;
   color: #1f1b16;
   border: 1px solid rgba(31, 27, 22, 0.16);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 1px 3px rgba(0, 0, 0, 0.14);
+}
+
+:root[data-btn-motion="on"] .btn-primary {
+  animation: btn-iridescent 8s ease-in-out infinite;
+}
+
+@keyframes btn-iridescent {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
 }
 
 .btn-primary:hover:not(:disabled) {
@@ -2153,8 +2165,74 @@ input[type="checkbox"][switch]:focus-visible {
   color: var(--text-muted);
 }
 
+.inline-muted {
+  color: var(--text-secondary);
+  line-height: 20px;
+}
+
+.slug-status-ok {
+  font-size: 12px;
+  color: var(--status-online);
+}
+
+.slug-status-err {
+  font-size: 12px;
+  color: var(--status-offline);
+}
+
+/* User Settings Flyout */
+.user-flyout-wrap {
+  position: relative;
+}
+
+.user-flyout {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 310px;
+  padding: var(--sp-4);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+}
+
+.user-flyout-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.user-flyout-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.user-flyout-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 8px 10px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-hairline);
+}
+
+.user-flyout-foot {
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border-hairline);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
   }
 }

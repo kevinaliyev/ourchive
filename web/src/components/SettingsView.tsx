@@ -9,18 +9,20 @@ import { api, AuthIdentityMode, HubSettings, PublicNetworkConfig, User } from ".
 
 interface SettingsViewProps {
   currentUser: User;
-  scheme: "dark" | "light";
-  onChangeScheme: (next: "dark" | "light") => void;
-  netConfig: PublicNetworkConfig | null;
+  scheme?: "dark" | "light";
+  onChangeScheme?: (next: "dark" | "light") => void;
+  netConfig?: PublicNetworkConfig | null;
   onSettingsSaved: () => Promise<void>;
+  embeddedInAdmin?: boolean;
 }
 
 export function SettingsView({
   currentUser,
-  scheme,
+  scheme = "dark",
   onChangeScheme,
-  netConfig,
+  netConfig = null,
   onSettingsSaved,
+  embeddedInAdmin = false,
 }: SettingsViewProps) {
   const isHostAdmin = currentUser.role === "host_admin";
   const [adminCfg, setAdminCfg] = useState<HubSettings | null>(null);
@@ -88,8 +90,9 @@ export function SettingsView({
 
   return (
     <div className="section-stack">
-      {/* General User Settings */}
-      <section className="card">
+      {/* General User Settings (hidden when embedded inside the Host Admin panel) */}
+      {!embeddedInAdmin && onChangeScheme && (
+        <section className="card">
         <div className="section-head">
           <div>
             <h2 className="section-title">Account &amp; preferences</h2>
@@ -152,7 +155,8 @@ export function SettingsView({
             </div>
           </div>
         </div>
-      </section>
+        </section>
+      )}
 
       {/* Host Admin Only: Network Policy & Opt-In Edge Storage */}
       {isHostAdmin && adminCfg && (
@@ -375,7 +379,7 @@ export function SettingsView({
             </div>
 
             <div className="form-stack">
-              <div className="node-controls">
+              <div className="node-controls" style={{ gridTemplateColumns: "1fr" }}>
                 <label className="switch-row">
                   <span>
                     <strong>Enable opt-in edge storage</strong>
@@ -393,27 +397,27 @@ export function SettingsView({
                     {...({ switch: "" } as Record<string, string>)}
                   />
                 </label>
+              </div>
 
-                <div className="field">
-                  <label htmlFor="edge-provider">Provider</label>
-                  <select
-                    id="edge-provider"
-                    value={adminCfg.edge_storage.provider}
-                    onChange={(e) =>
-                      setAdminCfg({
-                        ...adminCfg,
-                        edge_storage: {
-                          ...adminCfg.edge_storage,
-                          provider: e.target.value as "none" | "s3" | "bunny",
-                        },
-                      })
-                    }
-                  >
-                    <option value="none">None (disabled)</option>
-                    <option value="s3">S3-Compatible (Cloudflare R2, Backblaze B2, MinIO, Wasabi, AWS)</option>
-                    <option value="bunny">Bunny.net Storage + Pull Zone CDN</option>
-                  </select>
-                </div>
+              <div className="field">
+                <label htmlFor="edge-provider">Provider</label>
+                <select
+                  id="edge-provider"
+                  value={adminCfg.edge_storage.provider}
+                  onChange={(e) =>
+                    setAdminCfg({
+                      ...adminCfg,
+                      edge_storage: {
+                        ...adminCfg.edge_storage,
+                        provider: e.target.value as "none" | "s3" | "bunny",
+                      },
+                    })
+                  }
+                >
+                  <option value="none">None (disabled)</option>
+                  <option value="s3">S3-Compatible (Cloudflare R2, Backblaze B2, MinIO, Wasabi, AWS)</option>
+                  <option value="bunny">Bunny.net Storage + Pull Zone CDN</option>
+                </select>
               </div>
 
               {adminCfg.edge_storage.provider !== "none" && (

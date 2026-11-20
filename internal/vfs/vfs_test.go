@@ -98,7 +98,7 @@ func TestTagComposedSharedTrees(t *testing.T) {
 	defer store.Close()
 
 	authSvc := auth.NewService(store)
-	u, err := authSvc.SetupHostAdmin(ctx, "ru@ourchive.local", "Ru", "password123")
+	u, err := authSvc.SetupHostAdmin(ctx, "ru@ourchive.local", "ru", "Ru", "password123")
 	if err != nil {
 		t.Fatalf("SetupHostAdmin: %v", err)
 	}

@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeftRight, Folder, Link2, LogOut, Monitor, Settings, Users } from "lucide-react";
+import { ArrowLeftRight, Folder, KeyRound, Link2, Monitor, Shield } from "lucide-react";
 import { api, AuthStatus, formatMbps, HealthPayload, NodeView, PublicNetworkConfig, ShareLink, User } from "./api";
 import { AuthView } from "./components/AuthView";
 import { ContributionView } from "./components/ContributionView";
 import { ConverterView } from "./components/ConverterView";
 import { ExplorerView } from "./components/ExplorerView";
-import { SettingsView } from "./components/SettingsView";
 import { SharesView } from "./components/SharesView";
+import { UserSettingsFlyout } from "./components/UserSettingsFlyout";
 import { UsersGroupsView } from "./components/UsersGroupsView";
 
-type Tab = "explorer" | "converter" | "shares" | "contribution" | "people" | "settings";
+type Tab = "explorer" | "converter" | "shares" | "contribution" | "admin";
 
 export function App() {
   const [tab, setTab] = useState<Tab>("explorer");
@@ -18,6 +18,13 @@ export function App() {
       return localStorage.getItem("ourchive-color-scheme") === "light" ? "light" : "dark";
     } catch {
       return "dark";
+    }
+  });
+  const [btnMotion, setBtnMotion] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("ourchive-btn-motion") !== "off";
+    } catch {
+      return true;
     }
   });
   const [hub, setHub] = useState<HealthPayload | null>(null);
@@ -33,6 +40,13 @@ export function App() {
       localStorage.setItem("ourchive-color-scheme", scheme);
     } catch {}
   }, [scheme]);
+
+  useEffect(() => {
+    document.documentElement.dataset.btnMotion = btnMotion ? "on" : "off";
+    try {
+      localStorage.setItem("ourchive-btn-motion", btnMotion ? "on" : "off");
+    } catch {}
+  }, [btnMotion]);
 
   const refreshNodes = useCallback(async () => {
     try {
@@ -149,31 +163,24 @@ export function App() {
               <span>Contribution</span>
             </button>
             {canOpenPeople && (
-              <button className="nav-tab" aria-current={tab === "people" ? "page" : undefined} onClick={() => setTab("people")}>
-                <Users size={15} strokeWidth={1.5} />
-                <span>{isAdmin ? "People" : "Invites"}</span>
+              <button className="nav-tab" aria-current={tab === "admin" ? "page" : undefined} onClick={() => setTab("admin")}>
+                {isAdmin ? <Shield size={15} strokeWidth={1.5} /> : <KeyRound size={15} strokeWidth={1.5} />}
+                <span>{isAdmin ? "Admin" : "Invites"}</span>
               </button>
             )}
-            <button className="nav-tab" aria-current={tab === "settings" ? "page" : undefined} onClick={() => setTab("settings")}>
-              <Settings size={15} strokeWidth={1.5} />
-              <span>Settings</span>
-            </button>
           </nav>
 
           <div className="nav-actions">
-            <div className="segmented" role="group" aria-label="Color scheme">
-              <button className="seg-btn" aria-pressed={scheme === "dark"} onClick={() => setScheme("dark")}>
-                Dark
-              </button>
-              <button className="seg-btn" aria-pressed={scheme === "light"} onClick={() => setScheme("light")}>
-                Light
-              </button>
-            </div>
             {auth?.user && (
-              <button className="btn" type="button" onClick={handleLogout} title={`Signed in as ${auth.user.email}`}>
-                <LogOut size={14} strokeWidth={1.5} />
-                <span>{auth.user.display_name}</span>
-              </button>
+              <UserSettingsFlyout
+                user={auth.user}
+                scheme={scheme}
+                onChangeScheme={setScheme}
+                btnMotion={btnMotion}
+                onChangeBtnMotion={setBtnMotion}
+                netConfig={netConfig}
+                onLogout={handleLogout}
+              />
             )}
           </div>
         </div>
@@ -187,16 +194,17 @@ export function App() {
               {tab === "converter" && "Converter"}
               {tab === "shares" && "Share links"}
               {tab === "contribution" && "Contribution settings"}
-              {tab === "people" && "People & groups"}
-              {tab === "settings" && "Settings"}
+              {tab === "admin" && (isAdmin ? "Admin" : "Invites")}
             </h1>
             <p className="page-sub">
               {tab === "explorer" && "Browse segregated nodes or tag-composed shared trees. Preview directly, download only what you need."}
               {tab === "converter" && "Convert media using your GPU host, browser hardware, or offline WASM."}
               {tab === "shares" && "Public clip embeds routed via your isolated share subdomain."}
               {tab === "contribution" && "Configure shared folders, upload limits, and GPU participation from the browser."}
-              {tab === "people" && "Manage accounts, roles, and access groups for this hub."}
-              {tab === "settings" && "Manage your preferences, WebRTC P2P transfers, relay guardrails, and opt-in edge storage."}
+              {tab === "admin" &&
+                (isAdmin
+                  ? "Manage members, invite lineage, groups, audit logs, and Hub transfer & storage policies."
+                  : "Mint and manage your invite keys for this Ourchive hub.")}
             </p>
           </div>
 
@@ -213,7 +221,9 @@ export function App() {
         </div>
 
         {tab === "contribution" && <ContributionView nodes={nodes} onRefresh={refreshNodes} />}
-        {tab === "people" && auth?.user && <UsersGroupsView currentUser={auth.user} netConfig={netConfig} />}
+        {tab === "admin" && auth?.user && (
+          <UsersGroupsView currentUser={auth.user} netConfig={netConfig} onSettingsSaved={refreshNetConfig} />
+        )}
 
         {tab === "explorer" && auth?.user && (
           <ExplorerView
@@ -223,16 +233,6 @@ export function App() {
             netConfig={netConfig}
             onSharesChanged={refreshShares}
             onGoToContribution={() => setTab("contribution")}
-          />
-        )}
-
-        {tab === "settings" && auth?.user && (
-          <SettingsView
-            currentUser={auth.user}
-            scheme={scheme}
-            onChangeScheme={setScheme}
-            netConfig={netConfig}
-            onSettingsSaved={refreshNetConfig}
           />
         )}
 

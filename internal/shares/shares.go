@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,30 @@ import (
 )
 
 const slugAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+
+var (
+	ErrSlugTaken   = errors.New("that custom URL slug is already in use")
+	ErrInvalidSlug = errors.New("custom slug must be 3–64 characters (letters, numbers, hyphens, underscores)")
+
+	customSlugRe  = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{1,62}[a-zA-Z0-9]$`)
+	reservedSlugs = map[string]bool{
+		"robots.txt": true, "favicon.ico": true, "api": true, "health": true,
+		"raw": true, "oembed": true, "unlock": true, "zip": true,
+		"thumb": true, "admin": true, "login": true, "static": true,
+	}
+)
+
+// ValidateCustomSlug normalizes and validates a user-chosen share slug.
+func ValidateCustomSlug(raw string) (string, error) {
+	s := strings.TrimSpace(strings.TrimPrefix(raw, "/"))
+	if !customSlugRe.MatchString(s) {
+		return "", ErrInvalidSlug
+	}
+	if reservedSlugs[strings.ToLower(s)] {
+		return "", errors.New("that custom URL slug is reserved")
+	}
+	return s, nil
+}
 
 type ShareLink struct {
 	Slug        string              `json:"slug"`
@@ -65,6 +90,7 @@ type CreateRequest struct {
 	Title          string `json:"title"`
 	MimeType       string `json:"mime_type"`
 	SizeBytes      int64  `json:"size_bytes"`
+	CustomSlug     string `json:"custom_slug,omitempty"`
 	Password       string `json:"password,omitempty"`
 	MaxViews       int    `json:"max_views,omitempty"`
 	ExpiresInHours int    `json:"expires_in_hours,omitempty"` // 0 = permanent
@@ -113,6 +139,22 @@ func generateSlug(n int) (string, error) {
 	return b.String(), nil
 }
 
+// IsSlugAvailable validates a custom slug and checks case-insensitively that no existing link uses it.
+func (s *Service) IsSlugAvailable(ctx context.Context, raw string) (string, bool, string) {
+	norm, err := ValidateCustomSlug(raw)
+	if err != nil {
+		return "", false, err.Error()
+	}
+	var count int
+	if err := s.store.DB.QueryRowContext(ctx, `SELECT COUNT(1) FROM share_links WHERE LOWER(slug) = LOWER(?)`, norm).Scan(&count); err != nil {
+		return norm, false, "database check failed"
+	}
+	if count > 0 {
+		return norm, false, ErrSlugTaken.Error()
+	}
+	return norm, true, ""
+}
+
 func (s *Service) Create(ctx context.Context, req CreateRequest, userID string) (*ShareLink, error) {
 	cleaned, err := vfs.CleanRelPath(req.RelPath)
 	if err != nil {
@@ -122,9 +164,21 @@ func (s *Service) Create(ctx context.Context, req CreateRequest, userID string) 
 		return nil, errors.New("node_id and mount_id are required")
 	}
 
-	slug, err := generateSlug(8)
-	if err != nil {
-		return nil, err
+	var slug string
+	if strings.TrimSpace(req.CustomSlug) != "" {
+		norm, ok, reason := s.IsSlugAvailable(ctx, req.CustomSlug)
+		if !ok {
+			if reason == ErrSlugTaken.Error() {
+				return nil, ErrSlugTaken
+			}
+			return nil, errors.New(reason)
+		}
+		slug = norm
+	} else {
+		slug, err = generateSlug(8)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	title := strings.TrimSpace(req.Title)

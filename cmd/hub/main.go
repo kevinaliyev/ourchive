@@ -1386,6 +1386,16 @@ func main() {
 		writeJSON(w, http.StatusOK, map[string]any{"shares": list})
 	}))
 
+	appMux.HandleFunc("GET /api/shares/check-slug", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		slug := r.URL.Query().Get("slug")
+		norm, ok, reason := shareSvc.IsSlugAvailable(r.Context(), slug)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"slug":      norm,
+			"available": ok,
+			"reason":    reason,
+		})
+	}))
+
 	appMux.HandleFunc("POST /api/shares", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
 		u := auth.UserFromContext(r.Context())
 		var req shares.CreateRequest
@@ -1394,6 +1404,10 @@ func main() {
 			return
 		}
 		link, err := shareSvc.Create(r.Context(), req, u.ID)
+		if errors.Is(err, shares.ErrSlugTaken) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return

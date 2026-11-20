@@ -450,6 +450,10 @@ export const api = {
   getTree: (slug: string) => request<{ slug: string; items: TreeItem[] }>(`/api/trees/${encodeURIComponent(slug)}`),
 
   listShares: () => request<{ shares: ShareLink[] }>("/api/shares"),
+  checkShareSlug: (slug: string) =>
+    request<{ slug: string; available: boolean; reason: string }>(
+      `/api/shares/check-slug?slug=${encodeURIComponent(slug)}`,
+    ),
   createShare: (body: {
     node_id: string;
     mount_id: string;
@@ -458,6 +462,7 @@ export const api = {
     title: string;
     mime_type: string;
     size_bytes: number;
+    custom_slug?: string;
     password?: string;
     max_views?: number;
     expires_in_hours?: number;

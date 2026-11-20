@@ -39,14 +39,14 @@ func TestPhase1AuthEnrollTunnelAndConfigPush(t *testing.T) {
 		t.Fatalf("expected 0 users initially, got %d (%v)", count, err)
 	}
 
-	admin, err := authSvc.SetupHostAdmin(ctx, "ru@ourchive.local", "Ru", "supersecret99")
+	admin, err := authSvc.SetupHostAdmin(ctx, "ru@ourchive.local", "ru", "Ru", "supersecret99")
 	if err != nil {
 		t.Fatalf("SetupHostAdmin: %v", err)
 	}
 	if admin.Role != auth.RoleHostAdmin {
 		t.Fatalf("expected host_admin, got %s", admin.Role)
 	}
-	if _, err := authSvc.SetupHostAdmin(ctx, "other@ourchive.local", "Other", "supersecret99"); err != auth.ErrAlreadyInitialized {
+	if _, err := authSvc.SetupHostAdmin(ctx, "other@ourchive.local", "other", "Other", "supersecret99"); err != auth.ErrAlreadyInitialized {
 		t.Fatalf("expected ErrAlreadyInitialized on second setup, got %v", err)
 	}
 	if _, err := authSvc.Authenticate(ctx, "ru@ourchive.local", "wrongpass"); err != auth.ErrInvalidCredentials {

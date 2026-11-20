@@ -40,7 +40,7 @@ var (
 	ErrInviteForbidden    = errors.New("you do not have permission to create invite keys")
 	ErrInviteQuotaReached = errors.New("you have reached your invite key quota")
 
-	usernameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]$`)
+	usernameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,30}[a-z0-9]$`)
 )
 
 type User struct {
@@ -136,7 +136,7 @@ func ValidateIdentity(email, username, mode string) (normEmail, normUsername str
 	}
 	if normUsername != "" {
 		if !usernameRe.MatchString(normUsername) {
-			return "", "", errors.New("username must be 3–32 characters (letters, numbers, ., _, -)")
+			return "", "", errors.New("username must be 2–32 characters (letters, numbers, ., _, -)")
 		}
 	}
 

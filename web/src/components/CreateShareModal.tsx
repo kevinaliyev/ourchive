@@ -1,8 +1,9 @@
 /**
  * CreateShareModal — Dialog for minting isolated share links (`s.` subdomain) for files or
- * folders-as-ZIP with optional Argon2id password protection, view caps, and expiration.
+ * folders-as-ZIP with custom URL slugs (collision-checked), URL query parameters, optional
+ * Argon2id password protection, view caps, and expiration.
  */
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Check, Copy, ExternalLink } from "lucide-react";
 import { api, ShareLink } from "../api";
 import { ModalDialog } from "./ModalDialog";
@@ -26,6 +27,12 @@ interface CreateShareModalProps {
 
 export function CreateShareModal({ target, onCreated, onClose }: CreateShareModalProps) {
   const [title, setTitle] = useState("");
+  const [customSlug, setCustomSlug] = useState("");
+  const [slugCheck, setSlugCheck] = useState<{ state: "idle" | "checking" | "ok" | "taken"; msg?: string }>({
+    state: "idle",
+  });
+  const [directDownload, setDirectDownload] = useState(false);
+  const [customParams, setCustomParams] = useState("");
   const [expiresHours, setExpiresHours] = useState("0");
   const [maxViews, setMaxViews] = useState("");
   const [password, setPassword] = useState("");
@@ -37,6 +44,10 @@ export function CreateShareModal({ target, onCreated, onClose }: CreateShareModa
   useEffect(() => {
     if (target) {
       setTitle(target.title);
+      setCustomSlug("");
+      setSlugCheck({ state: "idle" });
+      setDirectDownload(false);
+      setCustomParams("");
       setExpiresHours("0");
       setMaxViews("");
       setPassword("");
@@ -46,9 +57,56 @@ export function CreateShareModal({ target, onCreated, onClose }: CreateShareModa
     }
   }, [target]);
 
+  // Debounced live availability check for custom URL slugs
+  useEffect(() => {
+    const trimmed = customSlug.trim();
+    if (!trimmed) {
+      setSlugCheck({ state: "idle" });
+      return;
+    }
+    setSlugCheck({ state: "checking" });
+    const timer = window.setTimeout(() => {
+      api
+        .checkShareSlug(trimmed)
+        .then((res) => {
+          if (res.available) {
+            setSlugCheck({ state: "ok", msg: "Available" });
+          } else {
+            setSlugCheck({ state: "taken", msg: res.reason || "Unavailable" });
+          }
+        })
+        .catch(() => setSlugCheck({ state: "idle" }));
+    }, 280);
+    return () => window.clearTimeout(timer);
+  }, [customSlug]);
+
+  const finalURL = useMemo(() => {
+    if (!created) return "";
+    try {
+      const u = new URL(created.url);
+      if (directDownload) {
+        u.pathname = u.pathname.replace(/\/+$/, "") + "/raw";
+        u.searchParams.set("download", "1");
+      }
+      if (customParams.trim()) {
+        const extra = new URLSearchParams(customParams.trim().replace(/^\?/, ""));
+        extra.forEach((v, k) => {
+          if (k.trim()) u.searchParams.set(k.trim(), v);
+        });
+      }
+      return u.toString();
+    } catch {
+      return created.url;
+    }
+  }, [created, directDownload, customParams]);
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!target) return;
+    if (customSlug.trim() && slugCheck.state === "taken") {
+      setError(slugCheck.msg || "Custom URL slug is not available");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -60,6 +118,7 @@ export function CreateShareModal({ target, onCreated, onClose }: CreateShareModa
         title: title.trim() || target.title,
         mime_type: target.mimeType,
         size_bytes: target.sizeBytes,
+        custom_slug: customSlug.trim() || undefined,
         password: password.trim() || undefined,
         max_views: maxViews ? Math.max(1, Math.round(Number(maxViews))) : 0,
         expires_in_hours: Number(expiresHours) || 0,
@@ -107,28 +166,79 @@ export function CreateShareModal({ target, onCreated, onClose }: CreateShareModa
           </div>
 
           <div className="field">
-            <label htmlFor="share-expiry">Link lifetime</label>
-            <select id="share-expiry" value={expiresHours} onChange={(e) => setExpiresHours(e.target.value)}>
-              <option value="0">Permanent (until revoked)</option>
-              <option value="1">Temporary · 1 hour</option>
-              <option value="24">Temporary · 24 hours</option>
-              <option value="168">Temporary · 7 days</option>
-              <option value="720">Temporary · 30 days</option>
-            </select>
+            <label htmlFor="share-slug">
+              Custom URL slug <span className="inline-muted">(optional)</span>
+            </label>
+            <span className="field-hint">
+              Leave blank for a random 8-char link. Existing links are never overwritten.
+            </span>
+            <input
+              id="share-slug"
+              type="text"
+              className="mono"
+              placeholder="e.g. demo-clip-2026"
+              value={customSlug}
+              onChange={(e) => setCustomSlug(e.target.value)}
+            />
+            {slugCheck.state === "checking" && <span className="field-hint">Checking availability…</span>}
+            {slugCheck.state === "ok" && <span className="slug-status-ok">✓ {slugCheck.msg}</span>}
+            {slugCheck.state === "taken" && <span className="slug-status-err">✕ {slugCheck.msg}</span>}
+          </div>
+
+          <div className="settings-grid-2">
+            <div className="field">
+              <label htmlFor="share-expiry">Link lifetime</label>
+              <select id="share-expiry" value={expiresHours} onChange={(e) => setExpiresHours(e.target.value)}>
+                <option value="0">Permanent (until revoked)</option>
+                <option value="1">Temporary · 1 hour</option>
+                <option value="24">Temporary · 24 hours</option>
+                <option value="168">Temporary · 7 days</option>
+                <option value="720">Temporary · 30 days</option>
+              </select>
+            </div>
+
+            <div className="field">
+              <label htmlFor="share-views">Max views (optional)</label>
+              <input
+                id="share-views"
+                type="number"
+                min={1}
+                inputMode="numeric"
+                placeholder="Unlimited"
+                value={maxViews}
+                onChange={(e) => setMaxViews(e.target.value)}
+              />
+            </div>
           </div>
 
           <div className="field">
-            <label htmlFor="share-views">Max views (optional)</label>
+            <label htmlFor="share-params">
+              URL query parameters <span className="inline-muted">(optional)</span>
+            </label>
             <input
-              id="share-views"
-              type="number"
-              min={1}
-              inputMode="numeric"
-              placeholder="Unlimited"
-              value={maxViews}
-              onChange={(e) => setMaxViews(e.target.value)}
+              id="share-params"
+              type="text"
+              className="mono"
+              placeholder="e.g. t=15&ref=discord"
+              value={customParams}
+              onChange={(e) => setCustomParams(e.target.value)}
             />
           </div>
+
+          {!target.isDir && (
+            <label className="switch-row">
+              <span>
+                <strong>Direct download link</strong>
+                <small>Points straight to /raw?download=1 instead of the preview page</small>
+              </span>
+              <input
+                type="checkbox"
+                checked={directDownload}
+                onChange={(e) => setDirectDownload(e.target.checked)}
+                {...({ switch: "" } as Record<string, string>)}
+              />
+            </label>
+          )}
 
           <div className="field">
             <label htmlFor="share-password">Password (optional)</label>
@@ -153,7 +263,11 @@ export function CreateShareModal({ target, onCreated, onClose }: CreateShareModa
             <button type="button" className="btn" onClick={onClose}>
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary" disabled={busy}>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={busy || slugCheck.state === "taken" || slugCheck.state === "checking"}
+            >
               {busy ? "Creating…" : "Create share link"}
             </button>
           </div>
@@ -170,17 +284,17 @@ export function CreateShareModal({ target, onCreated, onClose }: CreateShareModa
             <div className="code-head">
               <span>{created.is_dir ? "Folder ZIP link" : "Share link"}</span>
               <div style={{ display: "inline-flex", gap: 6 }}>
-                <button type="button" className="btn btn-sm" onClick={() => copyURL(created.url)}>
+                <button type="button" className="btn btn-sm" onClick={() => copyURL(finalURL)}>
                   {copied ? <Check size={13} /> : <Copy size={13} />}
                   <span>{copied ? "Copied" : "Copy"}</span>
                 </button>
-                <a className="btn btn-sm" href={created.url} target="_blank" rel="noopener noreferrer">
+                <a className="btn btn-sm" href={finalURL} target="_blank" rel="noopener noreferrer">
                   <ExternalLink size={13} />
                   <span>Open</span>
                 </a>
               </div>
             </div>
-            <pre className="mono">{created.url}</pre>
+            <pre className="mono">{finalURL}</pre>
           </div>
 
           <div className="modal-actions">

@@ -19,15 +19,17 @@ import {
 } from "lucide-react";
 import { api, AuditEntry, formatDate, Group, InviteKey, PublicNetworkConfig, User } from "../api";
 import { ModalDialog } from "./ModalDialog";
+import { SettingsView } from "./SettingsView";
 
 interface UsersGroupsViewProps {
   currentUser: User;
   netConfig: PublicNetworkConfig | null;
+  onSettingsSaved: () => Promise<void>;
 }
 
-type PeopleTab = "members" | "invites" | "groups" | "audit";
+type PeopleTab = "members" | "invites" | "groups" | "audit" | "policy";
 
-export function UsersGroupsView({ currentUser, netConfig }: UsersGroupsViewProps) {
+export function UsersGroupsView({ currentUser, netConfig, onSettingsSaved }: UsersGroupsViewProps) {
   const isHostAdmin = currentUser.role === "host_admin";
   const isGroupAdmin = currentUser.role === "group_admin";
   const canInvite =
@@ -259,10 +261,10 @@ export function UsersGroupsView({ currentUser, netConfig }: UsersGroupsViewProps
           const grandChildren = inviteChildren.get(u.id) ?? [];
           return (
             <div key={u.id} style={{ padding: "6px 0" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 13 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 13, lineHeight: "20px" }}>
                 <strong>{u.display_name}</strong>
-                {u.username && <span className="mono node-sub">@{u.username}</span>}
-                {u.email && <span className="mono node-sub">{u.email}</span>}
+                {u.username && <span className="mono inline-muted">@{u.username}</span>}
+                {u.email && <span className="mono inline-muted">{u.email}</span>}
                 <span className="tag-chip mono">{u.role}</span>
                 {u.invite_key_prefix && (
                   <span className="tag-chip mono" title="Redeemed invite key">
@@ -270,7 +272,7 @@ export function UsersGroupsView({ currentUser, netConfig }: UsersGroupsViewProps
                   </span>
                 )}
                 {grandChildren.length > 0 && (
-                  <span className="node-sub">· invited {grandChildren.length}</span>
+                  <span className="inline-muted">· invited {grandChildren.length}</span>
                 )}
               </div>
               {renderTreeBranch(u.id, depth + 1)}
@@ -330,6 +332,17 @@ export function UsersGroupsView({ currentUser, netConfig }: UsersGroupsViewProps
             onClick={() => setSubTab("audit")}
           >
             Audit Log
+          </button>
+        )}
+        {isHostAdmin && (
+          <button
+            type="button"
+            role="tab"
+            className="seg-btn"
+            aria-pressed={subTab === "policy"}
+            onClick={() => setSubTab("policy")}
+          >
+            Hub Policy &amp; Storage
           </button>
         )}
       </div>
@@ -882,6 +895,16 @@ export function UsersGroupsView({ currentUser, netConfig }: UsersGroupsViewProps
             </div>
           )}
         </section>
+      )}
+
+      {/* TAB 5: HOST ADMIN POLICY & STORAGE */}
+      {subTab === "policy" && isHostAdmin && (
+        <SettingsView
+          currentUser={currentUser}
+          netConfig={netConfig}
+          onSettingsSaved={onSettingsSaved}
+          embeddedInAdmin
+        />
       )}
 
       {/* MODAL: GENERATE INVITE KEY */}
