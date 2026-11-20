@@ -244,6 +244,7 @@ export interface HubSettings {
   audit_core_enabled: boolean;
   audit_downloads_enabled: boolean;
   audit_previews_enabled: boolean;
+  dev_console_enabled: boolean;
 }
 
 export interface PublicNetworkConfig {
@@ -259,6 +260,7 @@ export interface PublicNetworkConfig {
   audit_core_enabled: boolean;
   audit_downloads_enabled: boolean;
   audit_previews_enabled: boolean;
+  dev_console_enabled: boolean;
 }
 
 export type AnnouncementKind = "broadcast" | "notice" | "warning" | "error";

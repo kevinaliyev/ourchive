@@ -259,6 +259,19 @@ export function SettingsView({
                     {...({ switch: "" } as Record<string, string>)}
                   />
                 </label>
+
+                <label className="switch-row">
+                  <span>
+                    <strong>Enable Admin Dev Console (`~` key)</strong>
+                    <small>Drop-down command overlay for admins to query users, shared dirs, banners, and panels</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(adminCfg.dev_console_enabled)}
+                    onChange={(e) => setAdminCfg({ ...adminCfg, dev_console_enabled: e.target.checked })}
+                    {...({ switch: "" } as Record<string, string>)}
+                  />
+                </label>
               </div>
             </div>
           </section>

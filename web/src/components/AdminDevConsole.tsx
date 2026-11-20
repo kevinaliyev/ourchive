@@ -1,0 +1,476 @@
+/**
+ * AdminDevConsole — Quake-style top-down translucent drop-down command console for admins.
+ * Summoned with the `~` / `` ` `` key when enabled in Host Admin settings. Executes typed
+ * Ourchive Hub API commands (users, dirs/mounts, banners, invites, audit tail, panel navigation)
+ * with command history and tab completion.
+ */
+import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
+import { AnnouncementKind, api, formatMbps, HealthPayload, NodeView, User } from "../api";
+
+interface ConsoleLine {
+  id: number;
+  kind: "cmd" | "out" | "ok" | "err" | "warn";
+  text: string;
+}
+
+interface AdminDevConsoleProps {
+  open: boolean;
+  onClose: () => void;
+  currentUser: User;
+  hub: HealthPayload | null;
+  nodes: NodeView[];
+  onNavigateTab: (tab: "explorer" | "converter" | "shares" | "contribution" | "admin") => void;
+  onChangeScheme: (next: "dark" | "light") => void;
+  onRefreshAnnouncements: () => Promise<void>;
+  onRefreshNodes: () => Promise<void>;
+}
+
+const KNOWN_COMMANDS = [
+  "help",
+  "status",
+  "users",
+  "dirs",
+  "nodes",
+  "shares",
+  "invites",
+  "invite",
+  "banner",
+  "audit",
+  "goto",
+  "theme",
+  "clear",
+  "close",
+];
+
+function tokenize(input: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      } else {
+        cur += ch;
+      }
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (/\s/.test(ch)) {
+      if (cur) {
+        out.push(cur);
+        cur = "";
+      }
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+export function AdminDevConsole({
+  open,
+  onClose,
+  currentUser,
+  hub,
+  nodes,
+  onNavigateTab,
+  onChangeScheme,
+  onRefreshAnnouncements,
+  onRefreshNodes,
+}: AdminDevConsoleProps) {
+  const [input, setInput] = useState("");
+  const [history, setHistory] = useState<string[]>([]);
+  const [histIdx, setHistIdx] = useState(-1);
+  const [lines, setLines] = useState<ConsoleLine[]>([
+    {
+      id: 1,
+      kind: "warn",
+      text: "Ourchive Admin Console — type 'help' for commands, '~' or Esc to hide.",
+    },
+  ]);
+  const nextId = useRef(2);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (open) {
+      window.setTimeout(() => inputRef.current?.focus(), 40);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [lines, open]);
+
+  function push(kind: ConsoleLine["kind"], text: string) {
+    setLines((prev) => [...prev.slice(-200), { id: nextId.current++, kind, text }]);
+  }
+
+  async function runCommand(raw: string) {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+
+    push("cmd", `${currentUser.username || currentUser.display_name}@ourchive $ ${trimmed}`);
+    setHistory((prev) => [trimmed, ...prev.slice(0, 49)]);
+    setHistIdx(-1);
+
+    const args = tokenize(trimmed);
+    const cmd = args[0].toLowerCase();
+
+    try {
+      switch (cmd) {
+        case "help":
+        case "?": {
+          push(
+            "out",
+            [
+              "Available commands:",
+              "  status                                    Hub version, online nodes, total traffic",
+              "  users                                     List all users, roles & inviters",
+              "  dirs | nodes                              List machines & shared folders/files",
+              "  shares                                    List active share links",
+              "  invites                                   List invite keys",
+              "  invite create [member|group_admin] [uses] [note]   Mint a new invite key",
+              "  banner <broadcast|notice|warning|error> [--pinned] <message...>",
+              "  banner list | banner clear <id|all>       Manage sticky banners",
+              "  audit [core|download|preview] [limit]     Tail recent audit log entries",
+              "  goto <explorer|converter|shares|contribution|admin>  Jump to panel",
+              "  theme <dark|light>                        Switch UI color scheme",
+              "  clear | close                             Clear output or hide console",
+            ].join("\n"),
+          );
+          break;
+        }
+
+        case "clear":
+        case "cls":
+          setLines([]);
+          break;
+
+        case "close":
+        case "exit":
+          onClose();
+          break;
+
+        case "status":
+        case "whoami": {
+          const online = nodes.filter((n) => n.status === "online").length;
+          const up = nodes.reduce((a, n) => a + (n.traffic?.upload_bps ?? 0), 0);
+          const down = nodes.reduce((a, n) => a + (n.traffic?.download_bps ?? 0), 0);
+          push(
+            "ok",
+            `Hub: ${hub ? `online (${hub.version}, share=${hub.share_host})` : "offline"} | User: ${currentUser.display_name} (${currentUser.role}) | Nodes: ${online}/${nodes.length} online | Traffic: ↑${formatMbps(up)} ↓${formatMbps(down)}`,
+          );
+          break;
+        }
+
+        case "users": {
+          const res = await api.listUsers();
+          if (res.users.length === 0) {
+            push("out", "No users found.");
+          } else {
+            const out = res.users
+              .map(
+                (u) =>
+                  `${u.display_name.padEnd(16)} ${(u.username ? "@" + u.username : u.email || "-").padEnd(26)} ${u.role.padEnd(12)} inv=${u.invited_by_name || "root"}${u.can_invite ? " [trusted]" : ""}`,
+              )
+              .join("\n");
+            push("out", out);
+          }
+          break;
+        }
+
+        case "dirs":
+        case "mounts":
+        case "nodes": {
+          await onRefreshNodes();
+          if (nodes.length === 0) {
+            push("out", "No machines enrolled.");
+          } else {
+            const rows: string[] = [];
+            for (const n of nodes) {
+              rows.push(`[${n.status.toUpperCase()}] ${n.display_name} (${n.os}/${n.arch}, owner=${n.owner_name})`);
+              if (n.mounts.length === 0) {
+                rows.push("    (no shared folders)");
+              } else {
+                for (const m of n.mounts) {
+                  rows.push(
+                    `    - ${m.name} [${m.kind || "folder"}] ${m.enabled ? "on" : "off"} -> ${m.local_path}`,
+                  );
+                }
+              }
+            }
+            push("out", rows.join("\n"));
+          }
+          break;
+        }
+
+        case "shares": {
+          const res = await api.listShares();
+          if (res.shares.length === 0) {
+            push("out", "No active share links.");
+          } else {
+            push(
+              "out",
+              res.shares
+                .map((s) => `${s.slug.padEnd(16)} views=${s.view_count}  ${s.title} -> ${s.url}`)
+                .join("\n"),
+            );
+          }
+          break;
+        }
+
+        case "invites": {
+          const res = await api.listInvites();
+          if (res.invites.length === 0) {
+            push("out", "No invite keys.");
+          } else {
+            push(
+              "out",
+              res.invites
+                .map(
+                  (k) =>
+                    `${k.code_prefix}…  role=${k.role.padEnd(11)} uses=${k.use_count}/${k.max_uses}  by=${k.creator_name}  ${k.revoked ? "[REVOKED]" : k.expired ? "[EXPIRED]" : "[ACTIVE]"} ${k.note}`,
+                )
+                .join("\n"),
+            );
+          }
+          break;
+        }
+
+        case "invite": {
+          if (args[1]?.toLowerCase() !== "create") {
+            push("warn", "Usage: invite create [member|group_admin] [max_uses] [note...]");
+            break;
+          }
+          const role = args[2] === "group_admin" || args[2] === "host_admin" ? args[2] : "member";
+          const maxUses = args[3] && !Number.isNaN(Number(args[3])) ? Math.max(1, Number(args[3])) : 1;
+          const note = args.slice(4).join(" ");
+          const res = await api.createInvite({ role, max_uses: maxUses, expires_in_hours: 72, note });
+          const link = `${window.location.origin}/?invite=${encodeURIComponent(res.invite.code || "")}`;
+          push("ok", `Created invite key: ${res.invite.code}\nLink: ${link}`);
+          break;
+        }
+
+        case "banner":
+        case "broadcast": {
+          const sub = args[1]?.toLowerCase();
+          if (!sub) {
+            push("warn", "Usage: banner <broadcast|notice|warning|error> [--pinned] <message...> | banner list | banner clear <id|all>");
+            break;
+          }
+          if (sub === "list") {
+            const res = await api.listAnnouncements(true);
+            if (res.announcements.length === 0) {
+              push("out", "No active banners.");
+            } else {
+              push(
+                "out",
+                res.announcements
+                  .map((a) => `${a.id.slice(0, 8)}  [${a.kind}]  ${a.dismissible ? "dismissible" : "pinned"}  ${a.title ? a.title + ": " : ""}${a.body}`)
+                  .join("\n"),
+              );
+            }
+            break;
+          }
+          if (sub === "clear") {
+            const target = args[2];
+            if (!target) {
+              push("warn", "Usage: banner clear <id-prefix|all>");
+              break;
+            }
+            const res = await api.listAnnouncements(true);
+            const matches =
+              target === "all"
+                ? res.announcements
+                : res.announcements.filter((a) => a.id.startsWith(target));
+            if (matches.length === 0) {
+              push("err", `No banner matching '${target}'.`);
+              break;
+            }
+            for (const m of matches) {
+              await api.deleteAnnouncement(m.id);
+            }
+            await onRefreshAnnouncements();
+            push("ok", `Cleared ${matches.length} banner(s).`);
+            break;
+          }
+          const validKinds: AnnouncementKind[] = ["broadcast", "notice", "warning", "error"];
+          const kind: AnnouncementKind = validKinds.includes(sub as AnnouncementKind)
+            ? (sub as AnnouncementKind)
+            : "broadcast";
+          const rest = validKinds.includes(sub as AnnouncementKind) ? args.slice(2) : args.slice(1);
+          let dismissible = true;
+          const bodyParts: string[] = [];
+          for (const tok of rest) {
+            if (tok === "--pinned") {
+              dismissible = false;
+            } else {
+              bodyParts.push(tok);
+            }
+          }
+          const body = bodyParts.join(" ").trim();
+          if (!body) {
+            push("err", "Banner message text is required.");
+            break;
+          }
+          await api.createAnnouncement({ kind, body, dismissible });
+          await onRefreshAnnouncements();
+          push("ok", `Published [${kind}] banner${dismissible ? "" : " (pinned)"}: ${body}`);
+          break;
+        }
+
+        case "audit": {
+          const cat = args[1] && ["core", "download", "preview"].includes(args[1]) ? args[1] : "all";
+          const limit = args[2] && !Number.isNaN(Number(args[2])) ? Math.min(30, Math.max(1, Number(args[2]))) : 12;
+          const res = await api.listAuditLogs({ category: cat, limit });
+          if (res.entries.length === 0) {
+            push("out", "No matching audit entries.");
+          } else {
+            push(
+              "out",
+              res.entries
+                .map(
+                  (e) =>
+                    `${new Date(e.created_at).toLocaleTimeString()}  [${e.category}]  ${e.action.padEnd(26)}  ${e.actor_label}  ${e.target_id || ""}`,
+                )
+                .join("\n"),
+            );
+          }
+          break;
+        }
+
+        case "goto":
+        case "cd":
+        case "panel": {
+          const dest = (args[1] || "").toLowerCase();
+          const map: Record<string, "explorer" | "converter" | "shares" | "contribution" | "admin"> = {
+            explorer: "explorer",
+            archive: "explorer",
+            files: "explorer",
+            converter: "converter",
+            convert: "converter",
+            shares: "shares",
+            links: "shares",
+            contribution: "contribution",
+            nodes: "contribution",
+            admin: "admin",
+            people: "admin",
+            audit: "admin",
+          };
+          const resolved = map[dest];
+          if (!resolved) {
+            push("err", "Unknown panel. Use: explorer, converter, shares, contribution, or admin.");
+            break;
+          }
+          onNavigateTab(resolved);
+          push("ok", `Switched to ${resolved} panel.`);
+          break;
+        }
+
+        case "theme": {
+          const next = args[1]?.toLowerCase();
+          if (next !== "dark" && next !== "light") {
+            push("warn", "Usage: theme <dark|light>");
+            break;
+          }
+          onChangeScheme(next);
+          push("ok", `Theme switched to ${next}.`);
+          break;
+        }
+
+        default:
+          push("err", `Unknown command '${cmd}'. Type 'help' for available commands.`);
+      }
+    } catch (err) {
+      push("err", err instanceof Error ? err.message : "Command failed");
+    }
+  }
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    const val = input;
+    setInput("");
+    void runCommand(val);
+  }
+
+  function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "`" || e.key === "~" || e.key === "Escape") {
+      e.preventDefault();
+      onClose();
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (history.length === 0) return;
+      const next = Math.min(history.length - 1, histIdx + 1);
+      setHistIdx(next);
+      setInput(history[next]);
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (histIdx <= 0) {
+        setHistIdx(-1);
+        setInput("");
+      } else {
+        const next = histIdx - 1;
+        setHistIdx(next);
+        setInput(history[next]);
+      }
+      return;
+    }
+    if (e.key === "Tab") {
+      e.preventDefault();
+      const lower = input.trim().toLowerCase();
+      if (!lower || lower.includes(" ")) return;
+      const match = KNOWN_COMMANDS.find((c) => c.startsWith(lower));
+      if (match) setInput(match + " ");
+    }
+  }
+
+  return (
+    <div
+      className={`dev-console-overlay ${open ? "open" : ""}`}
+      role="dialog"
+      aria-label="Ourchive Admin Dev Console"
+      aria-hidden={!open}
+    >
+      <div className="dev-console-head">
+        <span className="dev-console-title mono">
+          ourchive · {window.location.host}
+        </span>
+        <span className="dev-console-hint mono">~ / Esc to hide · Tab to autocomplete</span>
+      </div>
+
+      <div className="dev-console-output mono" ref={scrollRef}>
+        {lines.map((l) => (
+          <pre key={l.id} className={`dev-line dev-line-${l.kind}`}>
+            {l.text}
+          </pre>
+        ))}
+      </div>
+
+      <form className="dev-console-prompt" onSubmit={handleSubmit}>
+        <span className="dev-prompt-label mono">
+          [{currentUser.username || currentUser.display_name}@ourchive] $
+        </span>
+        <input
+          ref={inputRef}
+          type="text"
+          className="dev-prompt-input mono"
+          spellCheck={false}
+          autoComplete="off"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="help"
+        />
+      </form>
+    </div>
+  );
+}

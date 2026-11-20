@@ -55,6 +55,9 @@ type HubSettings struct {
 	AuditCoreEnabled      bool `json:"audit_core_enabled"`
 	AuditDownloadsEnabled bool `json:"audit_downloads_enabled"`
 	AuditPreviewsEnabled  bool `json:"audit_previews_enabled"`
+
+	// Admin drop-down dev console (`~` key)
+	DevConsoleEnabled bool `json:"dev_console_enabled"`
 }
 
 // PublicNetworkConfig is the non-secret subset exposed to logged-in users.
@@ -71,6 +74,7 @@ type PublicNetworkConfig struct {
 	AuditCoreEnabled       bool     `json:"audit_core_enabled"`
 	AuditDownloadsEnabled  bool     `json:"audit_downloads_enabled"`
 	AuditPreviewsEnabled   bool     `json:"audit_previews_enabled"`
+	DevConsoleEnabled      bool     `json:"dev_console_enabled"`
 }
 
 func DefaultSettings() HubSettings {
@@ -168,6 +172,7 @@ func (s *Store) Public() PublicNetworkConfig {
 		AuditCoreEnabled:       cur.AuditCoreEnabled,
 		AuditDownloadsEnabled:  cur.AuditDownloadsEnabled,
 		AuditPreviewsEnabled:   cur.AuditPreviewsEnabled,
+		DevConsoleEnabled:      cur.DevConsoleEnabled,
 	}
 }
 

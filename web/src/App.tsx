@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeftRight, Folder, KeyRound, Link2, Monitor, Shield } from "lucide-react";
 import { Announcement, api, AuthStatus, formatMbps, HealthPayload, NodeView, PublicNetworkConfig, ShareLink, User } from "./api";
+import { AdminDevConsole } from "./components/AdminDevConsole";
 import { AuthView } from "./components/AuthView";
 import { ContributionView } from "./components/ContributionView";
 import { ConverterView } from "./components/ConverterView";
@@ -34,6 +35,7 @@ export function App() {
   const [shares, setShares] = useState<ShareLink[]>([]);
   const [netConfig, setNetConfig] = useState<PublicNetworkConfig | null>(null);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [devConsoleOpen, setDevConsoleOpen] = useState(false);
   const [dismissedIds, setDismissedIds] = useState<string[]>(() => {
     try {
       const raw = localStorage.getItem("ourchive-dismissed-announcements");
@@ -170,6 +172,25 @@ export function App() {
 
   const isAdmin = auth?.user?.role === "host_admin" || auth?.user?.role === "group_admin";
   const canOpenPeople = isAdmin || Boolean(auth?.user?.can_invite);
+  const canUseDevConsole = isAdmin && Boolean(netConfig?.dev_console_enabled);
+
+  useEffect(() => {
+    if (!canUseDevConsole) {
+      setDevConsoleOpen(false);
+      return;
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "`" && e.key !== "~") return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      const inEditable = tag === "input" || tag === "textarea" || tag === "select" || target?.isContentEditable;
+      if (inEditable && !devConsoleOpen) return;
+      e.preventDefault();
+      setDevConsoleOpen((v) => !v);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [canUseDevConsole, devConsoleOpen]);
   const totalUpBps = nodes.reduce((acc, n) => acc + (n.traffic?.upload_bps ?? 0), 0);
   const totalDownBps = nodes.reduce((acc, n) => acc + (n.traffic?.download_bps ?? 0), 0);
 
@@ -260,6 +281,20 @@ export function App() {
       </header>
 
       <StickyBannerStack messages={stickyMessages} onDismiss={handleDismissBanner} />
+
+      {canUseDevConsole && auth?.user && (
+        <AdminDevConsole
+          open={devConsoleOpen}
+          onClose={() => setDevConsoleOpen(false)}
+          currentUser={auth.user}
+          hub={hub}
+          nodes={nodes}
+          onNavigateTab={setTab}
+          onChangeScheme={setScheme}
+          onRefreshAnnouncements={refreshAnnouncements}
+          onRefreshNodes={refreshNodes}
+        />
+      )}
 
       <main className="canvas">
         <div className="page-head">
