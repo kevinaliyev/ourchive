@@ -9,6 +9,7 @@ import {
   Copy,
   GitBranch,
   KeyRound,
+  Megaphone,
   Plus,
   RefreshCw,
   ScrollText,
@@ -17,7 +18,7 @@ import {
   UserPlus,
   Users,
 } from "lucide-react";
-import { api, AuditEntry, formatDate, Group, InviteKey, PublicNetworkConfig, User } from "../api";
+import { Announcement, AnnouncementKind, api, AuditEntry, formatDate, Group, InviteKey, PublicNetworkConfig, User } from "../api";
 import { ModalDialog } from "./ModalDialog";
 import { SettingsView } from "./SettingsView";
 
@@ -25,11 +26,12 @@ interface UsersGroupsViewProps {
   currentUser: User;
   netConfig: PublicNetworkConfig | null;
   onSettingsSaved: () => Promise<void>;
+  onAnnouncementsChanged?: () => Promise<void>;
 }
 
-type PeopleTab = "members" | "invites" | "groups" | "audit" | "policy";
+type PeopleTab = "members" | "invites" | "groups" | "audit" | "broadcasts" | "policy";
 
-export function UsersGroupsView({ currentUser, netConfig, onSettingsSaved }: UsersGroupsViewProps) {
+export function UsersGroupsView({ currentUser, netConfig, onSettingsSaved, onAnnouncementsChanged }: UsersGroupsViewProps) {
   const isHostAdmin = currentUser.role === "host_admin";
   const isGroupAdmin = currentUser.role === "group_admin";
   const canInvite =
@@ -71,6 +73,21 @@ export function UsersGroupsView({ currentUser, netConfig, onSettingsSaved }: Use
   const [newGroup, setNewGroup] = useState({ name: "", description: "" });
   const [memberPick, setMemberPick] = useState<Record<string, string>>({});
 
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [newAnn, setNewAnn] = useState<{
+    title: string;
+    body: string;
+    kind: AnnouncementKind;
+    dismissible: boolean;
+    expires_in_hours: number;
+  }>({
+    title: "",
+    body: "",
+    kind: "broadcast",
+    dismissible: true,
+    expires_in_hours: 0,
+  });
+
   const refreshCore = useCallback(async () => {
     setError(null);
     try {
@@ -81,6 +98,9 @@ export function UsersGroupsView({ currentUser, netConfig, onSettingsSaved }: Use
       }
       if (canInvite) {
         tasks.push(api.listInvites().then((r) => setInvites(r.invites)));
+      }
+      if (isHostAdmin) {
+        tasks.push(api.listAnnouncements(true).then((r) => setAnnouncements(r.announcements)));
       }
       await Promise.all(tasks);
     } catch (err) {
@@ -252,6 +272,37 @@ export function UsersGroupsView({ currentUser, netConfig, onSettingsSaved }: Use
     await refreshCore();
   }
 
+  async function handleCreateAnnouncement(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    try {
+      await api.createAnnouncement({
+        title: newAnn.title.trim() || undefined,
+        body: newAnn.body,
+        kind: newAnn.kind,
+        dismissible: newAnn.dismissible,
+        expires_in_hours: Number(newAnn.expires_in_hours) || 0,
+      });
+      setNewAnn({ title: "", body: "", kind: "broadcast", dismissible: true, expires_in_hours: 0 });
+      setNotice("Sticky broadcast published.");
+      await refreshCore();
+      if (onAnnouncementsChanged) await onAnnouncementsChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to publish broadcast");
+    }
+  }
+
+  async function handleDeleteAnnouncement(id: string) {
+    setError(null);
+    try {
+      await api.deleteAnnouncement(id);
+      await refreshCore();
+      if (onAnnouncementsChanged) await onAnnouncementsChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove broadcast");
+    }
+  }
+
   function renderTreeBranch(parentId: string, depth: number) {
     const children = inviteChildren.get(parentId) ?? [];
     if (children.length === 0) return null;
@@ -332,6 +383,17 @@ export function UsersGroupsView({ currentUser, netConfig, onSettingsSaved }: Use
             onClick={() => setSubTab("audit")}
           >
             Audit Log
+          </button>
+        )}
+        {isHostAdmin && (
+          <button
+            type="button"
+            role="tab"
+            className="seg-btn"
+            aria-pressed={subTab === "broadcasts"}
+            onClick={() => setSubTab("broadcasts")}
+          >
+            Broadcasts ({announcements.length})
           </button>
         )}
         {isHostAdmin && (
@@ -897,7 +959,158 @@ export function UsersGroupsView({ currentUser, netConfig, onSettingsSaved }: Use
         </section>
       )}
 
-      {/* TAB 5: HOST ADMIN POLICY & STORAGE */}
+      {/* TAB 5: STICKY BROADCASTS (HOST ADMIN) */}
+      {subTab === "broadcasts" && isHostAdmin && (
+        <div className="section-stack">
+          <section className="card">
+            <div className="section-head">
+              <div>
+                <h2 className="section-title">
+                  <Megaphone size={16} strokeWidth={1.6} />
+                  <span>Publish sticky message</span>
+                </h2>
+                <p className="page-sub">
+                  Pin an announcement, maintenance notice, warning, or error banner at the top of every member's
+                  screen.
+                </p>
+              </div>
+            </div>
+
+            <form className="form-stack" onSubmit={handleCreateAnnouncement}>
+              <div className="settings-grid-2">
+                <div className="field">
+                  <label htmlFor="ann-kind">Style / severity</label>
+                  <select
+                    id="ann-kind"
+                    value={newAnn.kind}
+                    onChange={(e) => setNewAnn((p) => ({ ...p, kind: e.target.value as AnnouncementKind }))}
+                  >
+                    <option value="broadcast">Admin broadcast (accent)</option>
+                    <option value="notice">Notification (neutral)</option>
+                    <option value="warning">Warning (amber)</option>
+                    <option value="error">Error / outage (red)</option>
+                  </select>
+                </div>
+
+                <div className="field">
+                  <label htmlFor="ann-exp">Auto-expire in (hours, 0 = manual)</label>
+                  <input
+                    id="ann-exp"
+                    type="number"
+                    min={0}
+                    className="mono"
+                    value={newAnn.expires_in_hours}
+                    onChange={(e) =>
+                      setNewAnn((p) => ({ ...p, expires_in_hours: Math.max(0, Number(e.target.value) || 0) }))
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="field">
+                <label htmlFor="ann-title">Title (optional)</label>
+                <input
+                  id="ann-title"
+                  type="text"
+                  placeholder="e.g. Scheduled server maintenance"
+                  value={newAnn.title}
+                  onChange={(e) => setNewAnn((p) => ({ ...p, title: e.target.value }))}
+                />
+              </div>
+
+              <div className="field">
+                <label htmlFor="ann-body">Message</label>
+                <input
+                  id="ann-body"
+                  type="text"
+                  required
+                  placeholder="e.g. Hub will restart at 2:00 AM EST for updates."
+                  value={newAnn.body}
+                  onChange={(e) => setNewAnn((p) => ({ ...p, body: e.target.value }))}
+                />
+              </div>
+
+              <div className="node-controls" style={{ gridTemplateColumns: "1fr" }}>
+                <label className="switch-row">
+                  <span>
+                    <strong>Allow members to dismiss</strong>
+                    <small>Turn off for critical messages that must stay pinned until you clear them</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={newAnn.dismissible}
+                    onChange={(e) => setNewAnn((p) => ({ ...p, dismissible: e.target.checked }))}
+                    {...({ switch: "" } as Record<string, string>)}
+                  />
+                </label>
+              </div>
+
+              <div className="modal-actions">
+                <button type="submit" className="btn btn-primary">
+                  <Megaphone size={14} strokeWidth={1.6} />
+                  <span>Publish sticky message</span>
+                </button>
+              </div>
+            </form>
+          </section>
+
+          <section className="card">
+            <div className="section-head">
+              <div>
+                <h2 className="section-title">Active sticky messages</h2>
+                <p className="page-sub">Clear a broadcast anytime to remove it from all connected clients.</p>
+              </div>
+            </div>
+            {announcements.length === 0 ? (
+              <div className="mounts-empty">
+                <Megaphone size={15} strokeWidth={1.5} />
+                <span>No sticky messages published.</span>
+              </div>
+            ) : (
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Style</th>
+                      <th>Message</th>
+                      <th>Dismissible</th>
+                      <th>Expires</th>
+                      <th className="num-col">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {announcements.map((a) => (
+                      <tr key={a.id}>
+                        <td>
+                          <span className="tag-chip mono">{a.kind}</span>
+                        </td>
+                        <td>
+                          {a.title && <strong style={{ marginRight: 6 }}>{a.title}</strong>}
+                          <span>{a.body}</span>
+                        </td>
+                        <td className="mono">{a.dismissible ? "Yes" : "Pinned"}</td>
+                        <td className="mono">{a.expires_at ? formatDate(a.expires_at) : "Manual"}</td>
+                        <td className="num-col">
+                          <button
+                            type="button"
+                            className="icon-btn danger"
+                            aria-label="Delete broadcast"
+                            onClick={() => handleDeleteAnnouncement(a.id)}
+                          >
+                            <Trash2 size={14} strokeWidth={1.5} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
+      {/* TAB 6: HOST ADMIN POLICY & STORAGE */}
       {subTab === "policy" && isHostAdmin && (
         <SettingsView
           currentUser={currentUser}

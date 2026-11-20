@@ -2230,6 +2230,105 @@ input[type="checkbox"][switch]:focus-visible {
   border-top: 1px solid var(--border-hairline);
 }
 
+/* Sticky Announcements & Contextual Notification Stack */
+.sticky-banner-stack {
+  position: sticky;
+  top: 60px;
+  z-index: 18;
+  background: color-mix(in srgb, var(--bg-canvas) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border-hairline);
+}
+
+.sticky-banner-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 8px var(--sp-6);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sticky-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-hairline);
+  font-size: 13px;
+  line-height: 19px;
+}
+
+.sticky-banner-main {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  flex: 1;
+}
+
+.sticky-banner-icon {
+  flex-shrink: 0;
+}
+
+.sticky-banner-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-xs);
+  font-size: 11px;
+  line-height: 1;
+  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  flex-shrink: 0;
+}
+
+.sticky-banner-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: var(--text-primary);
+  min-width: 0;
+}
+
+.sticky-banner-title {
+  font-weight: 600;
+}
+
+.sticky-banner-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.sticky-broadcast {
+  background: var(--accent-subtle);
+  border-color: color-mix(in srgb, var(--accent) 48%, transparent);
+  color: var(--accent);
+}
+
+.sticky-notice {
+  background: var(--bg-raised);
+  border-color: var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.sticky-warning {
+  background: light-dark(rgba(217, 119, 6, 0.1), rgba(245, 158, 11, 0.12));
+  border-color: light-dark(rgba(217, 119, 6, 0.45), rgba(245, 158, 11, 0.45));
+  color: light-dark(#b45309, #fbbf24);
+}
+
+.sticky-error {
+  background: var(--status-offline-bg);
+  border-color: color-mix(in srgb, var(--status-offline) 55%, transparent);
+  color: var(--status-offline);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     transition-duration: 0.01ms !important;

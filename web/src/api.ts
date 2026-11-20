@@ -261,6 +261,20 @@ export interface PublicNetworkConfig {
   audit_previews_enabled: boolean;
 }
 
+export type AnnouncementKind = "broadcast" | "notice" | "warning" | "error";
+
+export interface Announcement {
+  id: string;
+  title: string;
+  body: string;
+  kind: AnnouncementKind;
+  dismissible: boolean;
+  expires_at?: string;
+  created_by: string;
+  creator_name: string;
+  created_at: string;
+}
+
 export interface ComputeJob {
   id: string;
   target_node_id: string;
@@ -468,6 +482,18 @@ export const api = {
     expires_in_hours?: number;
   }) => request<{ share: ShareLink }>("/api/shares", { method: "POST", body: JSON.stringify(body) }),
   deleteShare: (slug: string) => request<{ ok: boolean }>(`/api/shares/${encodeURIComponent(slug)}`, { method: "DELETE" }),
+
+  listAnnouncements: (all = false) =>
+    request<{ announcements: Announcement[] }>(`/api/announcements${all ? "?all=1" : ""}`),
+  createAnnouncement: (body: {
+    title?: string;
+    body: string;
+    kind: AnnouncementKind;
+    dismissible: boolean;
+    expires_in_hours?: number;
+  }) => request<{ announcement: Announcement }>("/api/announcements", { method: "POST", body: JSON.stringify(body) }),
+  deleteAnnouncement: (id: string) =>
+    request<{ ok: boolean }>(`/api/announcements/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   getPublicSettings: () => request<PublicNetworkConfig>("/api/settings/public"),
   getAdminSettings: () => request<HubSettings>("/api/settings"),

@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeftRight, Folder, KeyRound, Link2, Monitor, Shield } from "lucide-react";
-import { api, AuthStatus, formatMbps, HealthPayload, NodeView, PublicNetworkConfig, ShareLink, User } from "./api";
+import { Announcement, api, AuthStatus, formatMbps, HealthPayload, NodeView, PublicNetworkConfig, ShareLink, User } from "./api";
 import { AuthView } from "./components/AuthView";
 import { ContributionView } from "./components/ContributionView";
 import { ConverterView } from "./components/ConverterView";
 import { ExplorerView } from "./components/ExplorerView";
 import { SharesView } from "./components/SharesView";
+import { StickyBannerStack, StickyMessage } from "./components/StickyBannerStack";
 import { UserSettingsFlyout } from "./components/UserSettingsFlyout";
 import { UsersGroupsView } from "./components/UsersGroupsView";
 
@@ -32,6 +33,15 @@ export function App() {
   const [nodes, setNodes] = useState<NodeView[]>([]);
   const [shares, setShares] = useState<ShareLink[]>([]);
   const [netConfig, setNetConfig] = useState<PublicNetworkConfig | null>(null);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [dismissedIds, setDismissedIds] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem("ourchive-dismissed-announcements");
+      return raw ? (JSON.parse(raw) as string[]) : [];
+    } catch {
+      return [];
+    }
+  });
 
   useEffect(() => {
     const meta = document.querySelector('meta[name="color-scheme"]');
@@ -69,6 +79,13 @@ export function App() {
     } catch {}
   }, []);
 
+  const refreshAnnouncements = useCallback(async () => {
+    try {
+      const res = await api.listAnnouncements(false);
+      setAnnouncements(res.announcements);
+    } catch {}
+  }, []);
+
   useEffect(() => {
     api.health().then(setHub).catch(() => setHub(null));
     api.authStatus().then(setAuth).catch(() => setAuth(null));
@@ -79,9 +96,65 @@ export function App() {
     void refreshNodes();
     void refreshShares();
     void refreshNetConfig();
-    const timer = window.setInterval(() => void refreshNodes(), 5000);
+    void refreshAnnouncements();
+    const timer = window.setInterval(() => {
+      void refreshNodes();
+      void refreshAnnouncements();
+    }, 5000);
     return () => window.clearInterval(timer);
-  }, [auth?.user, refreshNodes, refreshShares, refreshNetConfig]);
+  }, [auth?.user, refreshNodes, refreshShares, refreshNetConfig, refreshAnnouncements]);
+
+  function handleDismissBanner(id: string) {
+    setDismissedIds((prev) => {
+      const next = prev.includes(id) ? prev : [...prev, id];
+      try {
+        localStorage.setItem("ourchive-dismissed-announcements", JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  }
+
+  // Combine Host Admin broadcasts + contextual system notifications (Hub offline, HW accel off)
+  const stickyMessages = useMemo<StickyMessage[]>(() => {
+    const out: StickyMessage[] = [];
+    if (auth?.user && !hub) {
+      out.push({
+        id: "sys-hub-offline",
+        kind: "error",
+        title: "Hub disconnected",
+        body: "Cannot reach the Ourchive Hub API. Live file browsing and uploads are paused until connection resumes.",
+        dismissible: false,
+      });
+    }
+    if (auth?.user && tab === "converter") {
+      const hasOnlineGPU = nodes.some(
+        (n) => n.status === "online" && n.compute?.enabled && (n.compute.hw_encoders?.length ?? 0) > 0 && (n.is_owner || n.allow_group_compute),
+      );
+      const hasBrowserWebCodecs = typeof window !== "undefined" && "VideoEncoder" in window;
+      if (!hasOnlineGPU && !hasBrowserWebCodecs && !dismissedIds.includes("sys-hw-accel-off")) {
+        out.push({
+          id: "sys-hw-accel-off",
+          kind: "warning",
+          title: "Hardware acceleration is off",
+          body: "No online GPU host is available and browser hardware encoding (WebCodecs) is unavailable. Video conversions will run slower on CPU.",
+          dismissible: true,
+          actionLabel: "Contribution settings",
+          onAction: () => setTab("contribution"),
+        });
+      }
+    }
+    for (const a of announcements) {
+      if (a.dismissible && dismissedIds.includes(a.id)) continue;
+      out.push({
+        id: a.id,
+        kind: a.kind,
+        title: a.title || undefined,
+        body: a.body,
+        dismissible: a.dismissible,
+      });
+    }
+    return out;
+  }, [auth?.user, hub, tab, nodes, announcements, dismissedIds]);
 
   async function handleLogout() {
     await api.logout();
@@ -186,6 +259,8 @@ export function App() {
         </div>
       </header>
 
+      <StickyBannerStack messages={stickyMessages} onDismiss={handleDismissBanner} />
+
       <main className="canvas">
         <div className="page-head">
           <div>
@@ -222,7 +297,12 @@ export function App() {
 
         {tab === "contribution" && <ContributionView nodes={nodes} onRefresh={refreshNodes} />}
         {tab === "admin" && auth?.user && (
-          <UsersGroupsView currentUser={auth.user} netConfig={netConfig} onSettingsSaved={refreshNetConfig} />
+          <UsersGroupsView
+            currentUser={auth.user}
+            netConfig={netConfig}
+            onSettingsSaved={refreshNetConfig}
+            onAnnouncementsChanged={refreshAnnouncements}
+          />
         )}
 
         {tab === "explorer" && auth?.user && (
