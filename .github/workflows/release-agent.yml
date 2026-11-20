@@ -1,0 +1,61 @@
+name: Release Ourchive Agent
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Cross-compile agent binaries & generate manifest.json
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          SIGNING_PUB: ${{ secrets.OURCHIVE_SIGNING_PUB_B64 }}
+        run: |
+          mkdir -p dist
+          TARGETS=("windows/amd64" "darwin/arm64" "darwin/amd64" "linux/amd64" "linux/arm64")
+          LDFLAGS="-s -w -X github.com/ourchive/ourchive/internal/updater.Version=${TAG}"
+          if [ -n "$SIGNING_PUB" ]; then
+            LDFLAGS="${LDFLAGS} -X github.com/ourchive/ourchive/internal/updater.SigningPubKeyB64=${SIGNING_PUB}"
+          fi
+
+          echo "{" > dist/manifest.json
+          echo "  \"version\": \"${TAG}\"," >> dist/manifest.json
+          echo "  \"published_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"," >> dist/manifest.json
+          echo "  \"assets\": {" >> dist/manifest.json
+
+          FIRST=1
+          for t in "${TARGETS[@]}"; do
+            GOOS="${t%/*}"
+            GOARCH="${t#*/}"
+            EXT=""
+            [ "$GOOS" = "windows" ] && EXT=".exe"
+            OUT="ourchive-agent-${GOOS}-${GOARCH}${EXT}"
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" go build -ldflags "$LDFLAGS" -o "dist/${OUT}" ./cmd/agent
+            HASH=$(sha256sum "dist/${OUT}" | awk '{print $1}')
+            URL="https://github.com/${REPO}/releases/download/${TAG}/${OUT}"
+            [ "$FIRST" -eq 0 ] && echo "," >> dist/manifest.json
+            FIRST=0
+            printf '    "%s": { "url": "%s", "sha256": "%s" }' "$t" "$URL" "$HASH" >> dist/manifest.json
+          done
+
+          echo "" >> dist/manifest.json
+          echo "  }" >> dist/manifest.json
+          echo "}" >> dist/manifest.json
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -27,7 +28,9 @@ import (
 	"github.com/hashicorp/yamux"
 
 	"github.com/ourchive/ourchive/internal/compute"
+	"github.com/ourchive/ourchive/internal/service"
 	"github.com/ourchive/ourchive/internal/tunnel"
+	"github.com/ourchive/ourchive/internal/updater"
 	"github.com/ourchive/ourchive/internal/vfs"
 	"github.com/ourchive/ourchive/pkg/protocol"
 )
@@ -71,6 +74,8 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "version":
+		fmt.Printf("ourchive-agent %s (%s/%s)\n", updater.Version, runtime.GOOS, runtime.GOARCH)
 	case "probe":
 		runProbe()
 	case "list":
@@ -79,9 +84,131 @@ func main() {
 		runEnroll(os.Args[2:])
 	case "run":
 		runDaemon(os.Args[2:])
+	case "update":
+		runUpdate(os.Args[2:])
+	case "service":
+		runService(os.Args[2:])
 	default:
 		printUsage()
 		os.Exit(1)
+	}
+}
+
+type AgentGlobalSettings struct {
+	AutoUpdate         bool   `json:"auto_update"`
+	UpdateURL          string `json:"update_url,omitempty"`
+	CheckIntervalHours int    `json:"check_interval_hours,omitempty"`
+}
+
+func globalSettingsPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return filepath.Join(".config", "ourchive", "agent-settings.json")
+	}
+	return filepath.Join(home, ".config", "ourchive", "agent-settings.json")
+}
+
+func loadGlobalSettings() AgentGlobalSettings {
+	gs := AgentGlobalSettings{CheckIntervalHours: 6}
+	data, err := os.ReadFile(globalSettingsPath())
+	if err == nil {
+		_ = json.Unmarshal(data, &gs)
+		if gs.CheckIntervalHours <= 0 {
+			gs.CheckIntervalHours = 6
+		}
+	}
+	return gs
+}
+
+func saveGlobalSettings(gs AgentGlobalSettings) error {
+	p := globalSettingsPath()
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(gs, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(p, b, 0o600)
+}
+
+func runUpdate(args []string) {
+	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	checkOnly := fs.Bool("check", false, "Only check if an update is available")
+	urlOverride := fs.String("url", "", "Manifest or GitHub Releases API URL")
+	enableAuto := fs.Bool("enable-auto", false, "Opt into silent background auto-updates")
+	disableAuto := fs.Bool("disable-auto", false, "Disable silent background auto-updates")
+	_ = fs.Parse(args)
+
+	gs := loadGlobalSettings()
+	if strings.TrimSpace(*urlOverride) != "" {
+		gs.UpdateURL = strings.TrimSpace(*urlOverride)
+	}
+	if *enableAuto {
+		gs.AutoUpdate = true
+		_ = saveGlobalSettings(gs)
+		fmt.Printf("Silent auto-updates enabled (settings saved to %s)\n", globalSettingsPath())
+	} else if *disableAuto {
+		gs.AutoUpdate = false
+		_ = saveGlobalSettings(gs)
+		fmt.Printf("Silent auto-updates disabled (settings saved to %s)\n", globalSettingsPath())
+	}
+
+	if gs.UpdateURL == "" {
+		log.Fatal("no update_url configured; pass --url https://api.github.com/repos/<owner>/<repo>/releases/latest")
+	}
+	if strings.TrimSpace(*urlOverride) != "" {
+		_ = saveGlobalSettings(gs)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	res, err := updater.CheckForUpdate(ctx, gs.UpdateURL, updater.Version)
+	if err != nil {
+		log.Fatalf("update check failed: %v", err)
+	}
+	if !res.UpdateAvail {
+		fmt.Printf("ourchive-agent is up to date (%s)\n", res.CurrentVersion)
+		return
+	}
+	fmt.Printf("Update available: %s -> %s\n", res.CurrentVersion, res.LatestVersion)
+	if *checkOnly {
+		return
+	}
+
+	exePath, err := os.Executable()
+	if err != nil {
+		log.Fatalf("locate executable: %v", err)
+	}
+	if err := updater.ApplyUpdate(ctx, res.Asset, exePath); err != nil {
+		log.Fatalf("apply update: %v", err)
+	}
+	fmt.Printf("Updated to %s. Restart ourchive-agent to run the new version.\n", res.LatestVersion)
+}
+
+func runService(args []string) {
+	if len(args) < 1 {
+		log.Fatal("usage: ourchive-agent service <install|uninstall>")
+	}
+	switch args[0] {
+	case "install":
+		exePath, err := os.Executable()
+		if err != nil {
+			log.Fatalf("locate executable: %v", err)
+		}
+		msg, err := service.Install(exePath)
+		if err != nil {
+			log.Fatalf("service install: %v", err)
+		}
+		fmt.Println(msg)
+	case "uninstall":
+		msg, err := service.Uninstall()
+		if err != nil {
+			log.Fatalf("service uninstall: %v", err)
+		}
+		fmt.Println(msg)
+	default:
+		log.Fatal("usage: ourchive-agent service <install|uninstall>")
 	}
 }
 
@@ -274,6 +401,14 @@ func runDaemon(args []string) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if exePath, err := os.Executable(); err == nil {
+		updater.CleanupOldBinary(exePath)
+		gs := loadGlobalSettings()
+		if gs.AutoUpdate && gs.UpdateURL != "" {
+			go runAutoUpdateLoop(ctx, exePath, gs, stop)
+		}
+	}
 
 	computeCaps := probeCompute()
 	var wg sync.WaitGroup
@@ -608,6 +743,54 @@ func probeCompute() protocol.ComputeCapabilities {
 	return compute.ProbeCompute()
 }
 
+func runAutoUpdateLoop(ctx context.Context, exePath string, gs AgentGlobalSettings, stop context.CancelFunc) {
+	interval := time.Duration(gs.CheckIntervalHours) * time.Hour
+	if interval < time.Hour {
+		interval = time.Hour
+	}
+	check := func() {
+		cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		res, err := updater.CheckForUpdate(cctx, gs.UpdateURL, updater.Version)
+		if err != nil || !res.UpdateAvail {
+			return
+		}
+		log.Printf("auto-update: downloading %s -> %s...", res.CurrentVersion, res.LatestVersion)
+		if err := updater.ApplyUpdate(cctx, res.Asset, exePath); err != nil {
+			log.Printf("auto-update failed: %v", err)
+			return
+		}
+		log.Printf("auto-update: upgraded to %s; spawning updated agent and exiting...", res.LatestVersion)
+		cmd := exec.Command(exePath, os.Args[1:]...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Start(); err != nil {
+			log.Printf("auto-update restart failed: %v", err)
+			return
+		}
+		stop()
+	}
+
+	// Quiet initial check 30s after boot, then periodic.
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(30 * time.Second):
+		check()
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			check()
+		}
+	}
+}
+
 func printUsage() {
-	fmt.Println("Usage: ourchive-agent <probe|list|enroll|run>")
+	fmt.Println("Usage: ourchive-agent <version|probe|list|enroll|run|update|service>")
 }
