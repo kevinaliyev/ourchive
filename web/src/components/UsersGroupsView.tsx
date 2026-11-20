@@ -1060,6 +1060,22 @@ export function UsersGroupsView({ currentUser, netConfig, onSettingsSaved, onAnn
                 <h2 className="section-title">Active sticky messages</h2>
                 <p className="page-sub">Clear a broadcast anytime to remove it from all connected clients.</p>
               </div>
+              {announcements.length > 0 && (
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  onClick={async () => {
+                    for (const a of announcements) {
+                      await api.deleteAnnouncement(a.id);
+                    }
+                    await refreshCore();
+                    if (onAnnouncementsChanged) await onAnnouncementsChanged();
+                  }}
+                >
+                  <Trash2 size={14} strokeWidth={1.6} />
+                  <span>Clear all</span>
+                </button>
+              )}
             </div>
             {announcements.length === 0 ? (
               <div className="mounts-empty">

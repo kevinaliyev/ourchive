@@ -96,7 +96,9 @@ export function AdminDevConsole({
 
   useEffect(() => {
     if (open) {
-      window.setTimeout(() => inputRef.current?.focus(), 40);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    } else {
+      inputRef.current?.blur();
     }
   }, [open]);
 
@@ -310,32 +312,57 @@ export function AdminDevConsole({
               push(
                 "out",
                 res.announcements
-                  .map((a) => `${a.id.slice(0, 8)}  [${a.kind}]  ${a.dismissible ? "dismissible" : "pinned"}  ${a.title ? a.title + ": " : ""}${a.body}`)
+                  .map(
+                    (a, idx) =>
+                      `#${String(idx + 1).padEnd(2)} ${a.id.slice(0, 8)}  [${a.kind}]  ${a.dismissible ? "dismissible" : "pinned"}  ${a.title ? a.title + ": " : ""}${a.body}`,
+                  )
                   .join("\n"),
               );
             }
             break;
           }
           if (sub === "clear") {
-            const target = args[2];
-            if (!target) {
-              push("warn", "Usage: banner clear <id-prefix|all>");
+            const rawTargets = args.slice(2);
+            if (rawTargets.length === 0) {
+              push("warn", "Usage: banner clear <1,2,3 | 1-4 | id-prefix | all>");
               break;
             }
             const res = await api.listAnnouncements(true);
-            const matches =
-              target === "all"
-                ? res.announcements
-                : res.announcements.filter((a) => a.id.startsWith(target));
-            if (matches.length === 0) {
-              push("err", `No banner matching '${target}'.`);
+            const selected = new Map<string, (typeof res.announcements)[number]>();
+            const tokens = rawTargets.flatMap((t) => t.split(",")).map((t) => t.trim()).filter(Boolean);
+            for (const tok of tokens) {
+              if (tok.toLowerCase() === "all") {
+                for (const a of res.announcements) selected.set(a.id, a);
+                continue;
+              }
+              const rangeMatch = tok.match(/^(\d+)-(\d+)$/);
+              if (rangeMatch) {
+                const start = Math.max(1, Number(rangeMatch[1]));
+                const end = Math.min(res.announcements.length, Number(rangeMatch[2]));
+                for (let n = start; n <= end; n++) {
+                  const item = res.announcements[n - 1];
+                  if (item) selected.set(item.id, item);
+                }
+                continue;
+              }
+              if (/^\d+$/.test(tok)) {
+                const item = res.announcements[Number(tok) - 1];
+                if (item) selected.set(item.id, item);
+                continue;
+              }
+              for (const a of res.announcements) {
+                if (a.id.startsWith(tok)) selected.set(a.id, a);
+              }
+            }
+            if (selected.size === 0) {
+              push("err", `No banners matched '${rawTargets.join(" ")}'. Run 'banner list' to see # numbers.`);
               break;
             }
-            for (const m of matches) {
+            for (const m of selected.values()) {
               await api.deleteAnnouncement(m.id);
             }
             await onRefreshAnnouncements();
-            push("ok", `Cleared ${matches.length} banner(s).`);
+            push("ok", `Cleared ${selected.size} banner(s).`);
             break;
           }
 
@@ -484,8 +511,10 @@ export function AdminDevConsole({
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "`" || e.key === "~" || e.key === "Escape") {
+    if (e.code === "Backquote" || e.key === "`" || e.key === "~" || e.key === "Escape") {
       e.preventDefault();
+      e.stopPropagation();
+      inputRef.current?.blur();
       onClose();
       return;
     }

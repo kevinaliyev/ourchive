@@ -180,17 +180,21 @@ export function App() {
       return;
     }
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key !== "`" && e.key !== "~") return;
+      const isTilde = e.code === "Backquote" || e.key === "`" || e.key === "~";
+      if (!isTilde) return;
       const target = e.target as HTMLElement | null;
+      const isConsoleInput = Boolean(target?.classList?.contains("dev-prompt-input"));
       const tag = target?.tagName?.toLowerCase();
-      const inEditable = tag === "input" || tag === "textarea" || tag === "select" || target?.isContentEditable;
-      if (inEditable && !devConsoleOpen) return;
+      const inOtherEditable =
+        !isConsoleInput && (tag === "input" || tag === "textarea" || tag === "select" || target?.isContentEditable);
+      if (inOtherEditable) return;
       e.preventDefault();
+      e.stopPropagation();
       setDevConsoleOpen((v) => !v);
     }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [canUseDevConsole, devConsoleOpen]);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [canUseDevConsole]);
   const totalUpBps = nodes.reduce((acc, n) => acc + (n.traffic?.upload_bps ?? 0), 0);
   const totalDownBps = nodes.reduce((acc, n) => acc + (n.traffic?.download_bps ?? 0), 0);
 
