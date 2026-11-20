@@ -1,0 +1,22 @@
+[Unit]
+Description=Ourchive Hub Control Plane
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ourchive
+WorkingDirectory=/opt/ourchive
+Environment=OURCHIVE_ADDR=:8080
+Environment=OURCHIVE_DB_PATH=/var/lib/ourchive/ourchive.db
+Environment=OURCHIVE_THUMB_DIR=/var/lib/ourchive/thumbs
+Environment=OURCHIVE_WEB_DIR=/opt/ourchive/web/dist
+Environment=OURCHIVE_PUBLIC_URL=https://archive.yourdomain.com
+Environment=OURCHIVE_SHARE_HOST=s.yourdomain.com
+Environment=OURCHIVE_SHARE_URL=https://s.yourdomain.com
+ExecStart=/opt/ourchive/ourchive-hub
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

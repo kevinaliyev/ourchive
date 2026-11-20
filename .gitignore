@@ -1,5 +1,6 @@
 # Binaries & build outputs
 /bin/
+/dist/
 *.exe
 *.dll
 *.so
@@ -14,6 +15,7 @@ ourchive-agent
 *.db-wal
 agent.toml
 agent.json
+.env
 
 # Node / Web
 /web/node_modules/

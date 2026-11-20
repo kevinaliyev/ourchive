@@ -1,0 +1,39 @@
+services:
+  hub:
+    build: .
+    container_name: ourchive-hub
+    restart: unless-stopped
+    environment:
+      OURCHIVE_ADDR: ":8080"
+      OURCHIVE_DB_PATH: "/data/ourchive.db"
+      OURCHIVE_THUMB_DIR: "/data/thumbs"
+      OURCHIVE_WEB_DIR: "/app/web/dist"
+      OURCHIVE_PUBLIC_URL: "https://${OURCHIVE_APP_DOMAIN}"
+      OURCHIVE_SHARE_HOST: "${OURCHIVE_SHARE_DOMAIN}"
+      OURCHIVE_SHARE_URL: "https://${OURCHIVE_SHARE_DOMAIN}"
+    volumes:
+      - ./data:/data
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: ourchive-caddy
+    restart: unless-stopped
+    depends_on:
+      - hub
+    environment:
+      OURCHIVE_APP_DOMAIN: "${OURCHIVE_APP_DOMAIN}"
+      OURCHIVE_SHARE_DOMAIN: "${OURCHIVE_SHARE_DOMAIN}"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,16 @@
+# Ourchive Caddy Reverse Proxy (Automatic Let's Encrypt HTTPS)
+# Routes both the main Archive app and the isolated Share subdomain to ourchive-hub:8080.
+
+{$OURCHIVE_APP_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy hub:8080 {
+        flush_interval -1
+    }
+}
+
+{$OURCHIVE_SHARE_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy hub:8080 {
+        flush_interval -1
+    }
+}

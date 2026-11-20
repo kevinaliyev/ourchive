@@ -45,6 +45,7 @@ func main() {
 	shareHost := strings.ToLower(envOr("OURCHIVE_SHARE_HOST", "s.localhost"))
 	dbPath := envOr("OURCHIVE_DB_PATH", "data/ourchive.db")
 	thumbDir := envOr("OURCHIVE_THUMB_DIR", "data/thumbs")
+	webDir := envOr("OURCHIVE_WEB_DIR", "web/dist")
 	publicHubURL := envOr("OURCHIVE_PUBLIC_URL", "http://localhost"+addr)
 	_ = os.MkdirAll(thumbDir, 0o755)
 
@@ -73,7 +74,7 @@ func main() {
 	appMux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, healthResponse{
 			Status:    "ok",
-			Version:   "0.2.0-phase1",
+			Version:   "0.3.0",
 			ShareHost: shareHost,
 			Time:      time.Now().UTC().Format(time.RFC3339),
 		})
@@ -1941,6 +1942,12 @@ func main() {
 
 	appMux.HandleFunc("GET /api/agent/tunnel", broker.HandleAgentTunnel)
 
+	// --- Single-Process Production Web UI Serving (OURCHIVE_WEB_DIR, default: web/dist) ---
+	if info, err := os.Stat(filepath.Join(webDir, "index.html")); err == nil && !info.IsDir() {
+		log.Printf("serving built Web UI from %s", webDir)
+		appMux.HandleFunc("/", newSPAHandler(webDir))
+	}
+
 	// --- Isolated Share Subdomain (s.localhost / s.yourdomain.com) ---
 	shareHandler := shareSvc.ShareHandler()
 
@@ -2006,6 +2013,37 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func newSPAHandler(webDir string) http.HandlerFunc {
+	absRoot, _ := filepath.Abs(webDir)
+	indexPath := filepath.Join(absRoot, "index.html")
+	fsHandler := http.FileServer(http.Dir(absRoot))
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		clean := filepath.Clean(strings.TrimPrefix(r.URL.Path, "/"))
+		if clean == "." || clean == "" {
+			w.Header().Set("Cache-Control", "no-cache")
+			http.ServeFile(w, r, indexPath)
+			return
+		}
+		target := filepath.Join(absRoot, clean)
+		if strings.HasPrefix(target, absRoot+string(os.PathSeparator)) {
+			if info, err := os.Stat(target); err == nil && !info.IsDir() {
+				if strings.HasPrefix(r.URL.Path, "/assets/") {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				}
+				fsHandler.ServeHTTP(w, r)
+				return
+			}
+		}
+		w.Header().Set("Cache-Control", "no-cache")
+		http.ServeFile(w, r, indexPath)
+	}
 }
 
 type ipBucket struct {

@@ -1,0 +1,14 @@
+.git/
+data/
+dist/
+bin/
+web/node_modules/
+web/dist/
+web/.vite/
+agent.json
+agent.toml
+.env
+*.exe
+*.db
+*.db-wal
+*.db-shm
