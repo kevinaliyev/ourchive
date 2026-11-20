@@ -609,12 +609,12 @@ func main() {
 	appMux.HandleFunc("PATCH /api/nodes/{id}/config", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
 		nodeID := r.PathValue("id")
 		u := auth.UserFromContext(r.Context())
-		ok, err := broker.CanManageNode(r.Context(), nodeID, u)
+		isOwner, err := broker.IsNodeOwner(r.Context(), nodeID, u)
 		if errors.Is(err, auth.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "node not found")
 			return
 		}
-		if err != nil || !ok {
+		if err != nil || (!isOwner && u.Role != auth.RoleHostAdmin) {
 			writeError(w, http.StatusForbidden, "forbidden")
 			return
 		}
@@ -630,7 +630,13 @@ func main() {
 			return
 		}
 
-		if req.DisplayName != nil && strings.TrimSpace(*req.DisplayName) != "" {
+		// Non-owner Host Admins may ONLY pause/shut off a node — never mutate its owner settings.
+		if !isOwner && (req.DisplayName != nil || req.UploadCapMbps != nil || req.AllowGroupCompute != nil) {
+			writeError(w, http.StatusForbidden, "only the machine owner can modify node settings (Host Admins may only pause/shut off)")
+			return
+		}
+
+		if isOwner && req.DisplayName != nil && strings.TrimSpace(*req.DisplayName) != "" {
 			_, _ = store.DB.ExecContext(r.Context(), `UPDATE nodes SET display_name = ? WHERE id = ?`, strings.TrimSpace(*req.DisplayName), nodeID)
 		}
 		if req.Paused != nil {
@@ -640,10 +646,10 @@ func main() {
 			}
 			_, _ = store.DB.ExecContext(r.Context(), `UPDATE nodes SET paused = ? WHERE id = ?`, v, nodeID)
 		}
-		if req.UploadCapMbps != nil && *req.UploadCapMbps >= 0 {
+		if isOwner && req.UploadCapMbps != nil && *req.UploadCapMbps >= 0 {
 			_, _ = store.DB.ExecContext(r.Context(), `UPDATE nodes SET upload_cap_mbps = ? WHERE id = ?`, *req.UploadCapMbps, nodeID)
 		}
-		if req.AllowGroupCompute != nil {
+		if isOwner && req.AllowGroupCompute != nil {
 			v := 0
 			if *req.AllowGroupCompute {
 				v = 1
@@ -658,7 +664,7 @@ func main() {
 	appMux.HandleFunc("DELETE /api/nodes/{id}", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
 		nodeID := r.PathValue("id")
 		u := auth.UserFromContext(r.Context())
-		ok, err := broker.CanManageNode(r.Context(), nodeID, u)
+		ok, err := broker.CanShutoffNode(r.Context(), nodeID, u)
 		if errors.Is(err, auth.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "node not found")
 			return
@@ -669,19 +675,28 @@ func main() {
 		}
 		broker.DisconnectNode(nodeID)
 		_, _ = store.DB.ExecContext(r.Context(), `DELETE FROM nodes WHERE id = ?`, nodeID)
+		auditSvc.Log(r.Context(), audit.Entry{
+			Category:   audit.CategoryCore,
+			Action:     "node.disconnected",
+			ActorID:    u.ID,
+			ActorLabel: u.Label(),
+			TargetType: "node",
+			TargetID:   nodeID,
+			IPAddress:  audit.ClientIP(r),
+		})
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	}))
 
 	appMux.HandleFunc("POST /api/nodes/{id}/mounts", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
 		nodeID := r.PathValue("id")
 		u := auth.UserFromContext(r.Context())
-		ok, err := broker.CanManageNode(r.Context(), nodeID, u)
+		ok, err := broker.IsNodeOwner(r.Context(), nodeID, u)
 		if errors.Is(err, auth.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "node not found")
 			return
 		}
 		if err != nil || !ok {
-			writeError(w, http.StatusForbidden, "forbidden")
+			writeError(w, http.StatusForbidden, "only the machine owner can add shared paths")
 			return
 		}
 		var req struct {
@@ -726,9 +741,9 @@ func main() {
 		nodeID := r.PathValue("id")
 		mountID := r.PathValue("mountId")
 		u := auth.UserFromContext(r.Context())
-		ok, err := broker.CanManageNode(r.Context(), nodeID, u)
+		ok, err := broker.IsNodeOwner(r.Context(), nodeID, u)
 		if err != nil || !ok {
-			writeError(w, http.StatusForbidden, "forbidden")
+			writeError(w, http.StatusForbidden, "only the machine owner can modify shared paths")
 			return
 		}
 		var req struct {
@@ -769,9 +784,9 @@ func main() {
 		nodeID := r.PathValue("id")
 		mountID := r.PathValue("mountId")
 		u := auth.UserFromContext(r.Context())
-		ok, err := broker.CanManageNode(r.Context(), nodeID, u)
+		ok, err := broker.IsNodeOwner(r.Context(), nodeID, u)
 		if err != nil || !ok {
-			writeError(w, http.StatusForbidden, "forbidden")
+			writeError(w, http.StatusForbidden, "only the machine owner can remove shared paths")
 			return
 		}
 		_, _ = store.DB.ExecContext(r.Context(), `DELETE FROM mounts WHERE id = ? AND node_id = ?`, mountID, nodeID)
@@ -782,9 +797,9 @@ func main() {
 	appMux.HandleFunc("POST /api/nodes/{id}/pick-folder", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
 		nodeID := r.PathValue("id")
 		u := auth.UserFromContext(r.Context())
-		ok, err := broker.CanManageNode(r.Context(), nodeID, u)
+		ok, err := broker.IsNodeOwner(r.Context(), nodeID, u)
 		if err != nil || !ok {
-			writeError(w, http.StatusForbidden, "forbidden")
+			writeError(w, http.StatusForbidden, "only the machine owner can open local pickers")
 			return
 		}
 		client, err := broker.HTTPClientForNode(nodeID)
@@ -811,9 +826,9 @@ func main() {
 	appMux.HandleFunc("POST /api/nodes/{id}/pick-file", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
 		nodeID := r.PathValue("id")
 		u := auth.UserFromContext(r.Context())
-		ok, err := broker.CanManageNode(r.Context(), nodeID, u)
+		ok, err := broker.IsNodeOwner(r.Context(), nodeID, u)
 		if err != nil || !ok {
-			writeError(w, http.StatusForbidden, "forbidden")
+			writeError(w, http.StatusForbidden, "only the machine owner can open local pickers")
 			return
 		}
 		client, err := broker.HTTPClientForNode(nodeID)
@@ -1027,9 +1042,9 @@ func main() {
 		nodeID := r.PathValue("nodeId")
 		mountID := r.PathValue("mountId")
 		u := auth.UserFromContext(r.Context())
-		ok, err := broker.CanManageNode(r.Context(), nodeID, u)
+		ok, err := broker.IsNodeOwner(r.Context(), nodeID, u)
 		if err != nil || !ok {
-			writeError(w, http.StatusForbidden, "only the machine owner or host admin can upload here")
+			writeError(w, http.StatusForbidden, "only the machine owner can write files to this node")
 			return
 		}
 		client, err := broker.HTTPClientForNode(nodeID)
@@ -1072,9 +1087,9 @@ func main() {
 		nodeID := r.PathValue("nodeId")
 		mountID := r.PathValue("mountId")
 		u := auth.UserFromContext(r.Context())
-		ok, err := broker.CanManageNode(r.Context(), nodeID, u)
+		ok, err := broker.IsNodeOwner(r.Context(), nodeID, u)
 		if err != nil || !ok {
-			writeError(w, http.StatusForbidden, "forbidden")
+			writeError(w, http.StatusForbidden, "only the machine owner can create folders on this node")
 			return
 		}
 		client, err := broker.HTTPClientForNode(nodeID)
@@ -1116,9 +1131,9 @@ func main() {
 		nodeID := r.PathValue("nodeId")
 		mountID := r.PathValue("mountId")
 		u := auth.UserFromContext(r.Context())
-		ok, err := broker.CanManageNode(r.Context(), nodeID, u)
+		ok, err := broker.IsNodeOwner(r.Context(), nodeID, u)
 		if err != nil || !ok {
-			writeError(w, http.StatusForbidden, "forbidden")
+			writeError(w, http.StatusForbidden, "only the machine owner can delete files on this node")
 			return
 		}
 		client, err := broker.HTTPClientForNode(nodeID)
@@ -1162,7 +1177,7 @@ func main() {
 		nodeID := r.PathValue("nodeId")
 		mountID := r.PathValue("mountId")
 		u := auth.UserFromContext(r.Context())
-		ok, err := broker.CanManageNode(r.Context(), nodeID, u)
+		ok, err := broker.IsNodeOwner(r.Context(), nodeID, u)
 		if err != nil || !ok {
 			writeError(w, http.StatusForbidden, "only the machine owner can reveal files locally")
 			return
@@ -1252,7 +1267,7 @@ func main() {
 			writeError(w, http.StatusForbidden, "contributor has not opted this folder into parity sync")
 			return
 		}
-		ok, err := broker.CanManageNode(r.Context(), req.TargetNodeID, u)
+		ok, err := broker.IsNodeOwner(r.Context(), req.TargetNodeID, u)
 		if err != nil || !ok {
 			writeError(w, http.StatusForbidden, "target machine must belong to you")
 			return

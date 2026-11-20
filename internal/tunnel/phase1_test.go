@@ -195,4 +195,35 @@ func TestPhase1AuthEnrollTunnelAndConfigPush(t *testing.T) {
 	if nodes[0].Status != protocol.NodeStatusOnline || nodes[0].UploadCapMbps != 25 || len(nodes[0].Mounts) != 1 {
 		t.Fatalf("unexpected node view: %+v", nodes[0])
 	}
+
+	// Verify strict node ownership: host_admin cannot write/manage another member's node,
+	// but CAN shut it off (pause/disconnect).
+	member, err := authSvc.CreateUser(ctx, "member@ourchive.local", "Member", "memberpass99", auth.RoleMember)
+	if err != nil {
+		t.Fatalf("CreateUser member: %v", err)
+	}
+	memTok, _, err := broker.CreateEnrollToken(ctx, member.ID, "member-pc")
+	if err != nil {
+		t.Fatalf("CreateEnrollToken member: %v", err)
+	}
+	pub2, _, _ := ed25519.GenerateKey(rand.Reader)
+	memNode, err := broker.EnrollNode(ctx, protocol.EnrollRequest{
+		Token:       memTok,
+		DisplayName: "member-pc",
+		PublicKey:   base64.StdEncoding.EncodeToString(pub2),
+		OS:          "linux",
+		Arch:        "amd64",
+	})
+	if err != nil {
+		t.Fatalf("EnrollNode member: %v", err)
+	}
+	if ok, _ := broker.IsNodeOwner(ctx, memNode.NodeID, admin); ok {
+		t.Fatal("host_admin must NOT be treated as owner of another member's node")
+	}
+	if ok, _ := broker.IsNodeOwner(ctx, memNode.NodeID, member); !ok {
+		t.Fatal("member must be recognized as owner of their own node")
+	}
+	if ok, _ := broker.CanShutoffNode(ctx, memNode.NodeID, admin); !ok {
+		t.Fatal("host_admin must be allowed to shut off/pause any node")
+	}
 }

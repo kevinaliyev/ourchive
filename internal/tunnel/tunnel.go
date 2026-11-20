@@ -527,12 +527,12 @@ func (b *Broker) ListNodesForUser(ctx context.Context, currentUser *auth.User) (
 	return list, nil
 }
 
-func (b *Broker) CanManageNode(ctx context.Context, nodeID string, u *auth.User) (bool, error) {
+// IsNodeOwner returns true ONLY if the user strictly owns the machine.
+// Even a host_admin is NOT an owner of another user's machine and cannot write,
+// delete, mount, or trigger local OS actions on someone else's host.
+func (b *Broker) IsNodeOwner(ctx context.Context, nodeID string, u *auth.User) (bool, error) {
 	if u == nil {
 		return false, nil
-	}
-	if u.Role == auth.RoleHostAdmin {
-		return true, nil
 	}
 	var ownerID string
 	err := b.store.DB.QueryRowContext(ctx, `SELECT owner_id FROM nodes WHERE id = ?`, nodeID).Scan(&ownerID)
@@ -543,4 +543,22 @@ func (b *Broker) CanManageNode(ctx context.Context, nodeID string, u *auth.User)
 		return false, err
 	}
 	return ownerID == u.ID, nil
+}
+
+// CanShutoffNode returns true if the user owns the node OR is a host_admin
+// (who is allowed to pause/shut off or disconnect any node from the Hub).
+func (b *Broker) CanShutoffNode(ctx context.Context, nodeID string, u *auth.User) (bool, error) {
+	if u == nil {
+		return false, nil
+	}
+	owner, err := b.IsNodeOwner(ctx, nodeID, u)
+	if err != nil {
+		return false, err
+	}
+	return owner || u.Role == auth.RoleHostAdmin, nil
+}
+
+// CanManageNode is retained as an alias for CanShutoffNode (owner or host_admin).
+func (b *Broker) CanManageNode(ctx context.Context, nodeID string, u *auth.User) (bool, error) {
+	return b.CanShutoffNode(ctx, nodeID, u)
 }
