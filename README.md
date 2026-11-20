@@ -54,6 +54,30 @@ For bare-metal Linux without Docker, see [deploy/ourchive-hub.service](deploy/ou
 
 ## Contributor Agent Setup
 
+### Option A — One-Paste Install (No Go Required)
+Replace `<OWNER>/<REPO>`, `<HUB_URL>`, and `<TOKEN>` (from **Contribution settings → Connect a machine**):
+
+**Windows (PowerShell):**
+```powershell
+$repo="OWNER/REPO"; $hub="https://archive.yourdomain.com"; $tok="TOKEN"; $dir="$env:LOCALAPPDATA\Ourchive"; New-Item -ItemType Directory -Force $dir | Out-Null; $exe="$dir\ourchive-agent.exe"; Invoke-WebRequest "https://github.com/$repo/releases/latest/download/ourchive-agent-windows-amd64.exe" -OutFile $exe; & $exe enroll --hub $hub --token $tok; & $exe update --url "https://api.github.com/repos/$repo/releases/latest" --enable-auto; & $exe service install; Start-Process $exe -ArgumentList "run" -WindowStyle Hidden
+```
+
+**macOS / Linux (Bash):**
+```bash
+REPO="OWNER/REPO" HUB="https://archive.yourdomain.com" TOK="TOKEN" bash -c '
+  OS=$(uname -s | tr "[:upper:]" "[:lower:]")
+  ARCH=$(uname -m | sed -e "s/x86_64/amd64/" -e "s/aarch64/arm64/")
+  DIR="$HOME/.local/bin"; mkdir -p "$DIR"; BIN="$DIR/ourchive-agent"
+  curl -fsSL "https://github.com/$REPO/releases/latest/download/ourchive-agent-$OS-$ARCH" -o "$BIN"
+  chmod +x "$BIN"
+  "$BIN" enroll --hub "$HUB" --token "$TOK"
+  "$BIN" update --url "https://api.github.com/repos/$REPO/releases/latest" --enable-auto
+  "$BIN" service install
+'
+```
+*(Add `--read-only` to `enroll` if you want the Agent to locally block all remote uploads, folder creation, and deletes.)*
+
+### Option B — Manual CLI Steps
 1. Generate an enrollment token in **Contribution settings → Connect a machine**.
 2. Enroll your machine (configs are stored per-Hub in `$HOME/.config/ourchive/hubs/`):
    ```bash
