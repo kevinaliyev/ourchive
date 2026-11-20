@@ -159,8 +159,8 @@ export function SettingsView({
         <form className="section-stack" onSubmit={handleSave}>
           {notice && (
             <div className="status-banner" role="status">
-              <Check size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />
-              {notice}
+              <Check size={14} strokeWidth={1.8} />
+              <span>{notice}</span>
             </div>
           )}
           {error && (
@@ -173,8 +173,8 @@ export function SettingsView({
             <div className="section-head">
               <div>
                 <h2 className="section-title">
-                  <KeyRound size={16} strokeWidth={1.6} style={{ verticalAlign: "text-bottom", marginRight: 8 }} />
-                  Host Admin · Registration, Invites &amp; Audit Policy
+                  <KeyRound size={16} strokeWidth={1.6} />
+                  <span>Host Admin · Registration, Invites &amp; Audit Policy</span>
                 </h2>
                 <p className="page-sub">
                   Control invite-only sign-up identifiers, delegate invite permissions, and configure tiered audit
@@ -263,8 +263,8 @@ export function SettingsView({
             <div className="section-head">
               <div>
                 <h2 className="section-title">
-                  <Shield size={16} strokeWidth={1.6} style={{ verticalAlign: "text-bottom", marginRight: 8 }} />
-                  Host Admin · Transfer &amp; Relay Policy
+                  <Shield size={16} strokeWidth={1.6} />
+                  <span>Host Admin · Transfer &amp; Relay Policy</span>
                 </h2>
                 <p className="page-sub">
                   Keep your Hub near-zero egress by preferring direct WebRTC P2P and capping or disabling yamux relay
@@ -364,8 +364,8 @@ export function SettingsView({
             <div className="section-head">
               <div>
                 <h2 className="section-title">
-                  <Cloud size={16} strokeWidth={1.6} style={{ verticalAlign: "text-bottom", marginRight: 8 }} />
-                  Host Admin · Opt-In Edge / Object Storage
+                  <Cloud size={16} strokeWidth={1.6} />
+                  <span>Host Admin · Opt-In Edge / Object Storage</span>
                 </h2>
                 <p className="page-sub">
                   Optional provider-agnostic edge cache for public share embeds &amp; cloud syncs — supports any

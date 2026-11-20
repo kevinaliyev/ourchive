@@ -276,7 +276,11 @@ button, input, select {
 .section-title {
   margin: 0;
   font-size: 16px;
+  line-height: 22px;
   font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .toolbar-row {
@@ -302,12 +306,14 @@ button, input, select {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 10px;
+  height: 28px;
+  padding: 0 10px;
   border-radius: var(--radius-sm);
   background: var(--bg-surface);
   border: 1px solid var(--border-hairline);
   font-family: var(--font-mono);
   font-size: 12px;
+  line-height: 1;
   color: var(--text-secondary);
 }
 
@@ -333,24 +339,32 @@ button, input, select {
   gap: 6px;
   font-family: var(--font-mono);
   font-size: 12px;
+  line-height: 1;
 }
 
 .io-up {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
   color: var(--net-up);
   background: var(--net-up-bg);
-  padding: 2px 7px;
+  padding: 0 8px;
   border-radius: var(--radius-xs);
 }
 
 .io-down {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
   color: var(--net-down);
   background: var(--net-down-bg);
-  padding: 2px 7px;
+  padding: 0 8px;
   border-radius: var(--radius-xs);
 }
 
 .segmented {
   display: inline-flex;
+  align-items: center;
   padding: 2px;
   border-radius: var(--radius-sm);
   background: var(--bg-raised);
@@ -358,15 +372,21 @@ button, input, select {
 }
 
 .seg-btn {
-  height: 24px;
-  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
   font-size: 12px;
+  line-height: 1;
   font-weight: 500;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .seg-btn[aria-pressed="true"] {
@@ -591,12 +611,19 @@ input[type="checkbox"][switch]:focus-visible {
 }
 
 .tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
   font-size: 11px;
-  padding: 2px 7px;
+  line-height: 1;
+  padding: 0 7px;
   border-radius: var(--radius-xs);
   background: var(--bg-raised);
   border: 1px solid var(--border-hairline);
   color: var(--text-secondary);
+  vertical-align: middle;
+  white-space: nowrap;
 }
 
 .node-controls {
@@ -661,7 +688,11 @@ input[type="checkbox"][switch]:focus-visible {
 }
 
 .mounts-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
+  line-height: 20px;
   color: var(--text-muted);
   padding: 12px;
   border-radius: var(--radius-sm);
@@ -851,9 +882,11 @@ input[type="checkbox"][switch]:focus-visible {
 .data-table th,
 .data-table td {
   text-align: left;
+  vertical-align: middle;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-hairline);
   font-size: 13px;
+  line-height: 20px;
 }
 
 .data-table th {
@@ -914,7 +947,13 @@ input[type="checkbox"][switch]:focus-visible {
 
 .add-member-row {
   display: flex;
+  align-items: center;
   gap: 8px;
+}
+
+.add-member-row select {
+  height: 32px;
+  font-size: 13px;
 }
 
 .mini-node-list {
@@ -931,6 +970,56 @@ input[type="checkbox"][switch]:focus-visible {
   border-radius: var(--radius-sm);
   background: var(--bg-canvas);
   border: 1px solid var(--border-hairline);
+}
+
+/* Segregated Hubs Strip */
+.hub-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+}
+
+.hub-strip-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  padding-right: 6px;
+  border-right: 1px solid var(--border-hairline);
+}
+
+.hub-pill-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.hub-pill-wrap a.source-pill {
+  text-decoration: none;
+}
+
+.hub-remove-btn {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-muted);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.hub-remove-btn:hover {
+  background: var(--status-offline-bg);
+  color: var(--status-offline);
 }
 
 /* Phase 2: Explorer, Responsive File Table & Slide-Over Inspector */
@@ -1073,12 +1162,15 @@ input[type="checkbox"][switch]:focus-visible {
 }
 
 .crumb {
+  display: inline-flex;
+  align-items: center;
   border: 0;
   background: transparent;
   padding: 2px 5px;
   border-radius: var(--radius-xs);
   cursor: pointer;
   color: var(--text-primary);
+  line-height: 18px;
 }
 
 .crumb:hover {
@@ -1091,11 +1183,15 @@ input[type="checkbox"][switch]:focus-visible {
 }
 
 .status-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 8px 12px;
   border-radius: var(--radius-sm);
   background: var(--accent-subtle);
   color: var(--text-primary);
   font-size: 13px;
+  line-height: 20px;
 }
 
 /* Responsive File Table (@container stacked layout + sticky headers) */
@@ -1126,9 +1222,11 @@ input[type="checkbox"][switch]:focus-visible {
 .vfs-table th,
 .vfs-table td {
   text-align: left;
+  vertical-align: middle;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-hairline);
   font-size: 13px;
+  line-height: 20px;
   font-weight: 400;
 }
 
@@ -1620,13 +1718,16 @@ input[type="checkbox"][switch]:focus-visible {
 }
 
 .filter-chip {
-  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
   padding: 0 9px;
   border-radius: var(--radius-xs);
   border: 1px solid var(--border-hairline);
   background: var(--bg-canvas);
   color: var(--text-secondary);
   font-size: 12px;
+  line-height: 1;
   cursor: pointer;
 }
 

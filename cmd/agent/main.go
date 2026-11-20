@@ -39,7 +39,7 @@ var knownHWEncoders = []string{
 	"h264_videotoolbox", "hevc_videotoolbox",
 }
 
-// AgentConfig is persisted locally on the contributor machine (default: agent.json).
+// AgentConfig is persisted locally per Hub under $HOME/.config/ourchive/hubs/<hub>.json.
 type AgentConfig struct {
 	HubURL            string                 `json:"hub_url"`
 	NodeID            string                 `json:"node_id"`
@@ -72,6 +72,8 @@ func main() {
 	switch os.Args[1] {
 	case "probe":
 		runProbe()
+	case "list":
+		runListHubs()
 	case "enroll":
 		runEnroll(os.Args[2:])
 	case "run":
@@ -79,6 +81,72 @@ func main() {
 	default:
 		printUsage()
 		os.Exit(1)
+	}
+}
+
+func defaultHubsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return filepath.Join(".config", "ourchive", "hubs")
+	}
+	return filepath.Join(home, ".config", "ourchive", "hubs")
+}
+
+func hubSlug(hubURL string) string {
+	u, err := url.Parse(strings.TrimSpace(hubURL))
+	raw := hubURL
+	if err == nil && u.Host != "" {
+		raw = u.Host
+	}
+	var b strings.Builder
+	for _, r := range strings.ToLower(raw) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	s := strings.Trim(b.String(), "-.")
+	if s == "" {
+		return "default"
+	}
+	return s
+}
+
+func defaultHubConfigPath(hubURL string) string {
+	return filepath.Join(defaultHubsDir(), hubSlug(hubURL)+".json")
+}
+
+func discoverHubConfigs() []string {
+	dir := defaultHubsDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	paths := []string{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".json") {
+			continue
+		}
+		paths = append(paths, filepath.Join(dir, e.Name()))
+	}
+	return paths
+}
+
+func runListHubs() {
+	paths := discoverHubConfigs()
+	if len(paths) == 0 {
+		fmt.Printf("No enrolled hubs found in %s\n", defaultHubsDir())
+		return
+	}
+	fmt.Printf("Enrolled hubs (%s):\n", defaultHubsDir())
+	for _, p := range paths {
+		cfg, err := loadConfig(p)
+		if err != nil {
+			fmt.Printf("  - %s (invalid: %v)\n", filepath.Base(p), err)
+			continue
+		}
+		fmt.Printf("  - %s -> %s (node: %s, mounts: %d)\n", filepath.Base(p), cfg.HubURL, cfg.DisplayName, len(cfg.Mounts))
 	}
 }
 
@@ -103,13 +171,17 @@ func runEnroll(args []string) {
 	hubURL := fs.String("hub", "http://localhost:8080", "Ourchive Hub URL")
 	token := fs.String("token", "", "One-time enrollment token from Contribution settings")
 	name := fs.String("name", "", "Display name for this machine (defaults to hostname)")
-	cfgPath := fs.String("config", "agent.json", "Path to save agent configuration")
+	cfgPath := fs.String("config", "", "Path to save agent configuration (default: $HOME/.config/ourchive/hubs/<hub>.json)")
 	var allowDirs multiFlag
 	fs.Var(&allowDirs, "allow-dir", "Optional allowed base directory whitelist (repeatable)")
 	_ = fs.Parse(args)
 
 	if *token == "" {
 		log.Fatal("--token is required")
+	}
+	targetCfgPath := strings.TrimSpace(*cfgPath)
+	if targetCfgPath == "" {
+		targetCfgPath = defaultHubConfigPath(*hubURL)
 	}
 
 	hostname, _ := os.Hostname()
@@ -166,50 +238,82 @@ func runEnroll(args []string) {
 		AllowedBaseDirs: cleanedAllow,
 	}
 
-	if err := saveConfig(*cfgPath, &cfg); err != nil {
+	if err := saveConfig(targetCfgPath, &cfg); err != nil {
 		log.Fatalf("save agent config: %v", err)
 	}
 
 	fmt.Printf("Enrolled machine %q (node_id: %s)\n", cfg.DisplayName, cfg.NodeID)
-	fmt.Printf("Config saved to %s\n", *cfgPath)
-	fmt.Printf("Start the headless agent with:\n  go run ./cmd/agent run --config %s\n", *cfgPath)
+	fmt.Printf("Config saved to %s\n", targetCfgPath)
+	fmt.Printf("Start the headless agent (connects to all enrolled hubs) with:\n  go run ./cmd/agent run\n")
 }
 
 func runDaemon(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	cfgPath := fs.String("config", "agent.json", "Path to agent configuration")
+	cfgPath := fs.String("config", "", "Optional single config file (default: connect to all hubs in $HOME/.config/ourchive/hubs/)")
 	_ = fs.Parse(args)
 
-	cfg, err := loadConfig(*cfgPath)
-	if err != nil {
-		log.Fatalf("load config %s: %v", *cfgPath, err)
+	var configPaths []string
+	if strings.TrimSpace(*cfgPath) != "" {
+		configPaths = []string{strings.TrimSpace(*cfgPath)}
+	} else {
+		configPaths = discoverHubConfigs()
+		if len(configPaths) == 0 {
+			// Fallback to legacy ./agent.json if present.
+			if _, err := os.Stat("agent.json"); err == nil {
+				configPaths = []string{"agent.json"}
+			}
+		}
 	}
-
-	privBytes, err := base64.StdEncoding.DecodeString(cfg.PrivateKey)
-	if err != nil || len(privBytes) != ed25519.PrivateKeySize {
-		log.Fatalf("invalid private_key in %s", *cfgPath)
+	if len(configPaths) == 0 {
+		log.Fatalf("no enrolled hubs found in %s (run `ourchive-agent enroll --hub <url> --token <tok>` first)", defaultHubsDir())
 	}
-	privKey := ed25519.PrivateKey(privBytes)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var cfgMu sync.RWMutex
 	computeCaps := probeCompute()
+	var wg sync.WaitGroup
+	for _, path := range configPaths {
+		cfg, err := loadConfig(path)
+		if err != nil {
+			log.Printf("skipping invalid config %s: %v", path, err)
+			continue
+		}
+		privBytes, err := base64.StdEncoding.DecodeString(cfg.PrivateKey)
+		if err != nil || len(privBytes) != ed25519.PrivateKeySize {
+			log.Printf("skipping config %s: invalid private_key", path)
+			continue
+		}
+		privKey := ed25519.PrivateKey(privBytes)
+		wg.Add(1)
+		go func(p string, c *AgentConfig, pk ed25519.PrivateKey) {
+			defer wg.Done()
+			runHubLoop(ctx, p, c, pk, computeCaps)
+		}(path, cfg, privKey)
+	}
 
+	wg.Wait()
+	log.Println("ourchive agent stopped")
+}
+
+func runHubLoop(
+	ctx context.Context,
+	cfgPath string,
+	cfg *AgentConfig,
+	privKey ed25519.PrivateKey,
+	computeCaps protocol.ComputeCapabilities,
+) {
+	var cfgMu sync.RWMutex
 	backoff := time.Second
 	for {
 		if ctx.Err() != nil {
-			log.Println("ourchive agent stopped")
 			return
 		}
-
-		err := connectAndServe(ctx, *cfgPath, cfg, &cfgMu, privKey, computeCaps)
+		err := connectAndServe(ctx, cfgPath, cfg, &cfgMu, privKey, computeCaps)
 		if ctx.Err() != nil {
-			log.Println("ourchive agent stopped")
 			return
 		}
-		log.Printf("tunnel disconnected (%v); reconnecting in %s...", err, backoff)
+		log.Printf("[%s] tunnel disconnected (%v); reconnecting in %s...", cfg.HubURL, err, backoff)
 		select {
 		case <-ctx.Done():
 			return
@@ -468,6 +572,11 @@ func buildTunnelURL(hubURL, nodeID string, priv ed25519.PrivateKey) (string, err
 }
 
 func saveConfig(path string, cfg *AgentConfig) error {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -492,5 +601,5 @@ func probeCompute() protocol.ComputeCapabilities {
 }
 
 func printUsage() {
-	fmt.Println("Usage: ourchive-agent <probe|enroll|run>")
+	fmt.Println("Usage: ourchive-agent <probe|list|enroll|run>")
 }

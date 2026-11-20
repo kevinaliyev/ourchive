@@ -336,8 +336,8 @@ export function UsersGroupsView({ currentUser, netConfig }: UsersGroupsViewProps
 
       {notice && (
         <div className="status-banner" role="status">
-          <Check size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />
-          {notice}
+          <Check size={14} strokeWidth={1.8} />
+          <span>{notice}</span>
         </div>
       )}
       {error && (
@@ -352,8 +352,8 @@ export function UsersGroupsView({ currentUser, netConfig }: UsersGroupsViewProps
           <div className="section-head">
             <div>
               <h3 className="section-title">
-                <KeyRound size={15} style={{ verticalAlign: "text-bottom", marginRight: 6 }} />
-                Invite key created (shown once)
+                <KeyRound size={15} strokeWidth={1.6} />
+                <span>Invite key created (shown once)</span>
               </h3>
               <p className="page-sub">Share this link or key with the person you are inviting.</p>
             </div>
@@ -507,8 +507,8 @@ export function UsersGroupsView({ currentUser, netConfig }: UsersGroupsViewProps
               <div className="section-head">
                 <div>
                   <h2 className="section-title">
-                    <GitBranch size={15} strokeWidth={1.6} style={{ verticalAlign: "text-bottom", marginRight: 6 }} />
-                    Invite lineage tree
+                    <GitBranch size={15} strokeWidth={1.6} />
+                    <span>Invite lineage tree</span>
                   </h2>
                   <p className="page-sub">Every account traced back to the inviter and invite key that brought them in.</p>
                 </div>
@@ -539,8 +539,8 @@ export function UsersGroupsView({ currentUser, netConfig }: UsersGroupsViewProps
 
           {invites.length === 0 ? (
             <div className="mounts-empty">
-              <KeyRound size={15} strokeWidth={1.5} style={{ verticalAlign: "middle", marginRight: 8 }} />
-              No invite keys created yet.
+              <KeyRound size={15} strokeWidth={1.5} />
+              <span>No invite keys created yet.</span>
             </div>
           ) : (
             <div className="table-wrap">
@@ -647,8 +647,8 @@ export function UsersGroupsView({ currentUser, netConfig }: UsersGroupsViewProps
 
           {groups.length === 0 ? (
             <div className="mounts-empty">
-              <Users size={16} strokeWidth={1.5} style={{ verticalAlign: "middle", marginRight: 8 }} />
-              No groups created yet.
+              <Users size={16} strokeWidth={1.5} />
+              <span>No groups created yet.</span>
             </div>
           ) : (
             <div className="group-list">
@@ -773,8 +773,8 @@ export function UsersGroupsView({ currentUser, netConfig }: UsersGroupsViewProps
           <div className="section-head">
             <div>
               <h2 className="section-title">
-                <ScrollText size={16} strokeWidth={1.6} style={{ verticalAlign: "text-bottom", marginRight: 8 }} />
-                Audit log
+                <ScrollText size={16} strokeWidth={1.6} />
+                <span>Audit log</span>
               </h2>
               <p className="page-sub">
                 Differentiated activity trail ({auditTotal} matching events). Configure active tiers in Settings.
@@ -829,8 +829,8 @@ export function UsersGroupsView({ currentUser, netConfig }: UsersGroupsViewProps
 
           {!isHostAdmin && !auditGroup ? (
             <div className="mounts-empty">
-              <ShieldAlert size={15} style={{ verticalAlign: "middle", marginRight: 8 }} />
-              Select one of your groups above to inspect its audit trail.
+              <ShieldAlert size={15} strokeWidth={1.6} />
+              <span>Select one of your groups above to inspect its audit trail.</span>
             </div>
           ) : auditEntries.length === 0 ? (
             <div className="mounts-empty">No audit events recorded for this filter.</div>
