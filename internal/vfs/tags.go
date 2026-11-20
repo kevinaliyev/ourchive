@@ -115,6 +115,21 @@ func (ts *TagStore) CreateOrGetTag(ctx context.Context, slug, description, userI
 	return tag, nil
 }
 
+func (ts *TagStore) CanDeleteTag(ctx context.Context, tagID, userID, userRole string) (bool, error) {
+	if userRole == "host_admin" {
+		return true, nil
+	}
+	var createdBy string
+	err := ts.store.DB.QueryRowContext(ctx, `SELECT created_by FROM tags WHERE id = ?`, tagID).Scan(&createdBy)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, sql.ErrNoRows
+	}
+	if err != nil {
+		return false, err
+	}
+	return createdBy == userID, nil
+}
+
 func (ts *TagStore) DeleteTag(ctx context.Context, tagID string) error {
 	_, err := ts.store.DB.ExecContext(ctx, `DELETE FROM tags WHERE id = ?`, tagID)
 	return err

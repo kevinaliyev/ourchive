@@ -434,6 +434,38 @@ func (s *Service) DeleteSession(ctx context.Context, sessionID string) error {
 	return err
 }
 
+func (s *Service) DeleteAllSessionsForUser(ctx context.Context, userID string) error {
+	_, err := s.store.DB.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = ?`, userID)
+	return err
+}
+
+// ChangePassword verifies the user's current password, updates to a new Argon2id hash,
+// and revokes all existing sessions for that user.
+func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) error {
+	if len(newPassword) < 8 {
+		return errors.New("new password must be at least 8 characters")
+	}
+	var currentHash string
+	err := s.store.DB.QueryRowContext(ctx, `SELECT password_hash FROM users WHERE id = ?`, userID).Scan(&currentHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !VerifyPassword(currentPassword, currentHash) {
+		return ErrInvalidCredentials
+	}
+	nextHash, err := HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	if _, err := s.store.DB.ExecContext(ctx, `UPDATE users SET password_hash = ? WHERE id = ?`, nextHash, userID); err != nil {
+		return err
+	}
+	return s.DeleteAllSessionsForUser(ctx, userID)
+}
+
 func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
 	rows, err := s.store.DB.QueryContext(ctx, `
 		SELECT u.id, u.email, u.username, u.display_name, u.role,

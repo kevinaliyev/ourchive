@@ -47,6 +47,7 @@ type AgentConfig struct {
 	PublicKey         string                 `json:"public_key"`
 	PrivateKey        string                 `json:"private_key"`
 	AllowedBaseDirs   []string               `json:"allowed_base_dirs,omitempty"`
+	ReadOnly          bool                   `json:"read_only,omitempty"`
 	Paused            bool                   `json:"paused"`
 	UploadCapMbps     int                    `json:"upload_cap_mbps"`
 	AllowGroupCompute bool                   `json:"allow_group_compute"`
@@ -172,6 +173,7 @@ func runEnroll(args []string) {
 	token := fs.String("token", "", "One-time enrollment token from Contribution settings")
 	name := fs.String("name", "", "Display name for this machine (defaults to hostname)")
 	cfgPath := fs.String("config", "", "Path to save agent configuration (default: $HOME/.config/ourchive/hubs/<hub>.json)")
+	readOnly := fs.Bool("read-only", false, "Never accept remote file uploads, mkdir, or deletes on this machine")
 	var allowDirs multiFlag
 	fs.Var(&allowDirs, "allow-dir", "Optional allowed base directory whitelist (repeatable)")
 	_ = fs.Parse(args)
@@ -236,6 +238,7 @@ func runEnroll(args []string) {
 		PublicKey:       base64.StdEncoding.EncodeToString(pub),
 		PrivateKey:      base64.StdEncoding.EncodeToString(priv),
 		AllowedBaseDirs: cleanedAllow,
+		ReadOnly:        *readOnly,
 	}
 
 	if err := saveConfig(targetCfgPath, &cfg); err != nil {
@@ -250,6 +253,7 @@ func runEnroll(args []string) {
 func runDaemon(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "Optional single config file (default: connect to all hubs in $HOME/.config/ourchive/hubs/)")
+	forceReadOnly := fs.Bool("read-only", false, "Force read-only mode across all hubs (blocks all remote writes/deletes)")
 	_ = fs.Parse(args)
 
 	var configPaths []string
@@ -285,6 +289,9 @@ func runDaemon(args []string) {
 			continue
 		}
 		privKey := ed25519.PrivateKey(privBytes)
+		if *forceReadOnly {
+			cfg.ReadOnly = true
+		}
 		wg.Add(1)
 		go func(p string, c *AgentConfig, pk ed25519.PrivateKey) {
 			defer wg.Done()
@@ -377,6 +384,7 @@ func connectAndServe(
 		copy(mountsCopy, cfg.Mounts)
 		return vfs.ConfigSnapshot{
 			Paused:        cfg.Paused,
+			ReadOnly:      cfg.ReadOnly,
 			UploadCapMbps: cfg.UploadCapMbps,
 			Mounts:        mountsCopy,
 		}

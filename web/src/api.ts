@@ -320,6 +320,9 @@ export const api = {
     password: string;
   }) => request<{ user: User }>("/api/auth/register", { method: "POST", body: JSON.stringify(body) }),
   logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+  logoutAll: () => request<{ ok: boolean }>("/api/auth/logout-all", { method: "POST" }),
+  changePassword: (body: { current_password: string; new_password: string }) =>
+    request<{ ok: boolean }>("/api/auth/change-password", { method: "POST", body: JSON.stringify(body) }),
 
   listUsers: () => request<{ users: User[] }>("/api/users"),
   createUser: (body: { email?: string; username?: string; display_name: string; password: string; role: string }) =>

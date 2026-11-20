@@ -310,6 +310,30 @@ func (s *Service) List(ctx context.Context, currentUser *auth.User) ([]ShareLink
 	return list, nil
 }
 
+// CanDelete returns true if the user created the share link, owns the hosting node, or is a host_admin.
+func (s *Service) CanDelete(ctx context.Context, slug string, u *auth.User) (bool, error) {
+	if u == nil {
+		return false, nil
+	}
+	if u.Role == auth.RoleHostAdmin {
+		return true, nil
+	}
+	var createdBy, nodeOwner string
+	err := s.store.DB.QueryRowContext(ctx, `
+		SELECT sl.created_by, n.owner_id
+		FROM share_links sl
+		JOIN nodes n ON n.id = sl.node_id
+		WHERE sl.slug = ?
+	`, slug).Scan(&createdBy, &nodeOwner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, auth.ErrNotFound
+	}
+	if err != nil {
+		return false, err
+	}
+	return createdBy == u.ID || nodeOwner == u.ID, nil
+}
+
 func (s *Service) GetBySlug(ctx context.Context, slug string) (*ShareLink, error) {
 	row := s.store.DB.QueryRowContext(ctx, `
 		SELECT sl.slug, sl.node_id, n.display_name, sl.mount_id, m.name, sl.rel_path, sl.is_dir,
@@ -769,6 +793,13 @@ func (s *Service) handleRaw(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set(hdr, v)
 		}
 	}
+	// Neutralize stored XSS in uploaded HTML/XHTML/SVG files.
+	ctLower := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.Contains(ctLower, "text/html") || strings.Contains(ctLower, "application/xhtml") || strings.Contains(ctLower, "image/svg") {
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, filepath.Base(sl.RelPath)))
+	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
 	w.WriteHeader(resp.StatusCode)
 	if r.Method != http.MethodHead {

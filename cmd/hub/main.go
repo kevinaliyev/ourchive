@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -61,6 +62,7 @@ func main() {
 	tagStore := vfs.NewTagStore(store)
 	settingsStore := settings.NewStore(ctx, store)
 	auditSvc := audit.NewService(store, settingsStore)
+	authLimiter := newIPRateLimiter(12, 12) // 12 req/min with burst 12 per IP on auth/invite/enroll endpoints
 
 	shareBaseURL := envOr("OURCHIVE_SHARE_URL", "http://"+shareHost+addr)
 	shareSvc := shares.NewService(store, broker, settingsStore, shareBaseURL, thumbDir)
@@ -92,6 +94,11 @@ func main() {
 	})
 
 	appMux.HandleFunc("POST /api/auth/setup", func(w http.ResponseWriter, r *http.Request) {
+		if !authLimiter.Allow(audit.ClientIP(r)) {
+			w.Header().Set("Retry-After", "60")
+			writeError(w, http.StatusTooManyRequests, "too many attempts; please wait a minute")
+			return
+		}
 		var req struct {
 			Email       string `json:"email"`
 			Username    string `json:"username"`
@@ -130,6 +137,11 @@ func main() {
 	})
 
 	appMux.HandleFunc("POST /api/auth/login", func(w http.ResponseWriter, r *http.Request) {
+		if !authLimiter.Allow(audit.ClientIP(r)) {
+			w.Header().Set("Retry-After", "60")
+			writeError(w, http.StatusTooManyRequests, "too many login attempts; please wait a minute")
+			return
+		}
 		var req struct {
 			Identifier string `json:"identifier"`
 			Email      string `json:"email"`
@@ -180,6 +192,11 @@ func main() {
 	})
 
 	appMux.HandleFunc("POST /api/auth/register", func(w http.ResponseWriter, r *http.Request) {
+		if !authLimiter.Allow(audit.ClientIP(r)) {
+			w.Header().Set("Retry-After", "60")
+			writeError(w, http.StatusTooManyRequests, "too many registration attempts; please wait a minute")
+			return
+		}
 		var req struct {
 			InviteCode  string `json:"invite_code"`
 			Email       string `json:"email"`
@@ -251,6 +268,53 @@ func main() {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
+
+	appMux.HandleFunc("POST /api/auth/logout-all", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		u := auth.UserFromContext(r.Context())
+		_ = authSvc.DeleteAllSessionsForUser(r.Context(), u.ID)
+		auth.ClearSessionCookie(w, r)
+		auditSvc.Log(r.Context(), audit.Entry{
+			Category:   audit.CategoryCore,
+			Action:     "auth.logout_all",
+			ActorID:    u.ID,
+			ActorLabel: u.Label(),
+			IPAddress:  audit.ClientIP(r),
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}))
+
+	appMux.HandleFunc("POST /api/auth/change-password", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		u := auth.UserFromContext(r.Context())
+		var req struct {
+			CurrentPassword string `json:"current_password"`
+			NewPassword     string `json:"new_password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if err := authSvc.ChangePassword(r.Context(), u.ID, req.CurrentPassword, req.NewPassword); err != nil {
+			if errors.Is(err, auth.ErrInvalidCredentials) {
+				writeError(w, http.StatusUnauthorized, "current password is incorrect")
+				return
+			}
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		// Re-issue a fresh session for this browser after revoking all other sessions.
+		sid, exp, err := authSvc.CreateSession(r.Context(), u.ID, auth.DefaultSessionTTL)
+		if err == nil {
+			auth.SetSessionCookie(w, r, sid, exp)
+		}
+		auditSvc.Log(r.Context(), audit.Entry{
+			Category:   audit.CategoryCore,
+			Action:     "auth.password_changed",
+			ActorID:    u.ID,
+			ActorLabel: u.Label(),
+			IPAddress:  audit.ClientIP(r),
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}))
 
 	// --- Users & Groups (Domain Admin RBAC) ---
 	appMux.HandleFunc("GET /api/users", authSvc.RequireRoles([]string{auth.RoleHostAdmin, auth.RoleGroupAdmin}, func(w http.ResponseWriter, r *http.Request) {
@@ -942,6 +1006,13 @@ func main() {
 				w.Header().Set(hdr, v)
 			}
 		}
+		// Neutralize stored XSS in uploaded HTML/XHTML/SVG files served via Hub.
+		ctLower := strings.ToLower(resp.Header.Get("Content-Type"))
+		if strings.Contains(ctLower, "text/html") || strings.Contains(ctLower, "application/xhtml") || strings.Contains(ctLower, "image/svg") {
+			w.Header().Set("Content-Disposition", "attachment")
+		}
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 		w.WriteHeader(resp.StatusCode)
 		if r.Method == http.MethodGet && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			rangeHdr := r.Header.Get("Range")
@@ -1320,7 +1391,18 @@ func main() {
 	}))
 
 	appMux.HandleFunc("DELETE /api/tags/{id}", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
-		if err := tagStore.DeleteTag(r.Context(), r.PathValue("id")); err != nil {
+		u := auth.UserFromContext(r.Context())
+		tagID := r.PathValue("id")
+		ok, err := tagStore.CanDeleteTag(r.Context(), tagID, u.ID, u.Role)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "tag not found")
+			return
+		}
+		if err != nil || !ok {
+			writeError(w, http.StatusForbidden, "only the tag creator or Host Admin can delete this tag")
+			return
+		}
+		if err := tagStore.DeleteTag(r.Context(), tagID); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to delete tag")
 			return
 		}
@@ -1444,6 +1526,15 @@ func main() {
 	appMux.HandleFunc("DELETE /api/shares/{slug}", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
 		u := auth.UserFromContext(r.Context())
 		slug := r.PathValue("slug")
+		ok, err := shareSvc.CanDelete(r.Context(), slug, u)
+		if errors.Is(err, auth.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "share link not found")
+			return
+		}
+		if err != nil || !ok {
+			writeError(w, http.StatusForbidden, "only the link creator, machine owner, or Host Admin can revoke this link")
+			return
+		}
 		if err := shareSvc.Delete(r.Context(), slug); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to revoke share link")
 			return
@@ -1830,6 +1921,11 @@ func main() {
 
 	// --- Agent Enrollment & Outbound Tunnel ---
 	appMux.HandleFunc("POST /api/agent/enroll", func(w http.ResponseWriter, r *http.Request) {
+		if !authLimiter.Allow(audit.ClientIP(r)) {
+			w.Header().Set("Retry-After", "60")
+			writeError(w, http.StatusTooManyRequests, "too many enrollment attempts; please wait a minute")
+			return
+		}
 		var req protocol.EnrollRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -1849,11 +1945,29 @@ func main() {
 	shareHandler := shareSvc.ShareHandler()
 
 	rootHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Baseline security headers on all responses.
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "same-origin")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+
 		host := strings.ToLower(strings.Split(r.Host, ":")[0])
 		if host == shareHost {
 			shareHandler.ServeHTTP(w, r)
 			return
 		}
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+
+		// CSRF defense-in-depth: block cross-site browser mutations on /api/* (excluding CLI agent enrollment).
+		if strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/api/agent/enroll" {
+			switch r.Method {
+			case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+				if strings.EqualFold(r.Header.Get("Sec-Fetch-Site"), "cross-site") {
+					writeError(w, http.StatusForbidden, "cross-site request blocked")
+					return
+				}
+			}
+		}
+
 		appMux.ServeHTTP(w, r)
 	})
 
@@ -1892,6 +2006,60 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+type ipBucket struct {
+	tokens float64
+	last   time.Time
+}
+
+type ipRateLimiter struct {
+	mu           sync.Mutex
+	buckets      map[string]*ipBucket
+	ratePerSec   float64
+	burst        float64
+	lastCleanup  time.Time
+}
+
+func newIPRateLimiter(perMinute, burst int) *ipRateLimiter {
+	return &ipRateLimiter{
+		buckets:     map[string]*ipBucket{},
+		ratePerSec:  float64(perMinute) / 60.0,
+		burst:       float64(burst),
+		lastCleanup: time.Now(),
+	}
+}
+
+func (l *ipRateLimiter) Allow(ip string) bool {
+	if ip == "" {
+		ip = "unknown"
+	}
+	now := time.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if now.Sub(l.lastCleanup) > 10*time.Minute {
+		for k, b := range l.buckets {
+			if now.Sub(b.last) > 15*time.Minute {
+				delete(l.buckets, k)
+			}
+		}
+		l.lastCleanup = now
+	}
+	b, ok := l.buckets[ip]
+	if !ok {
+		l.buckets[ip] = &ipBucket{tokens: l.burst - 1, last: now}
+		return true
+	}
+	b.tokens += now.Sub(b.last).Seconds() * l.ratePerSec
+	if b.tokens > l.burst {
+		b.tokens = l.burst
+	}
+	b.last = now
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens -= 1
+	return true
 }
 
 func copyThrottled(w io.Writer, r io.Reader, capBytesPerSec int64) {

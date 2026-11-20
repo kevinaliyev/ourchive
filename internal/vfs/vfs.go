@@ -60,6 +60,7 @@ func (m *TrafficMeter) Sample() (upBps, downBps int64) {
 // ConfigSnapshot supplies live Agent settings to the VFS handler.
 type ConfigSnapshot struct {
 	Paused        bool
+	ReadOnly      bool
 	UploadCapMbps int
 	Mounts        []protocol.FolderMount
 }
@@ -408,6 +409,10 @@ func (s *AgentServer) handleGetFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *AgentServer) handlePutFile(w http.ResponseWriter, r *http.Request) {
+	if s.GetConfig().ReadOnly {
+		http.Error(w, `{"error":"agent is running in read-only mode"}`, http.StatusForbidden)
+		return
+	}
 	root, _, err := s.openMountRoot(r.PathValue("mountId"))
 	if err != nil {
 		writeVFSError(w, err)
@@ -458,6 +463,10 @@ func (s *AgentServer) handlePutFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *AgentServer) handleMkdir(w http.ResponseWriter, r *http.Request) {
+	if s.GetConfig().ReadOnly {
+		http.Error(w, `{"error":"agent is running in read-only mode"}`, http.StatusForbidden)
+		return
+	}
 	root, _, err := s.openMountRoot(r.PathValue("mountId"))
 	if err != nil {
 		writeVFSError(w, err)
@@ -482,6 +491,10 @@ func (s *AgentServer) handleMkdir(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *AgentServer) handleDelete(w http.ResponseWriter, r *http.Request) {
+	if s.GetConfig().ReadOnly {
+		http.Error(w, `{"error":"agent is running in read-only mode"}`, http.StatusForbidden)
+		return
+	}
 	root, _, err := s.openMountRoot(r.PathValue("mountId"))
 	if err != nil {
 		writeVFSError(w, err)
