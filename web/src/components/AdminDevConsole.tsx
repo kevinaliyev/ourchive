@@ -134,9 +134,13 @@ export function AdminDevConsole({
               "  dirs | nodes                              List machines & shared folders/files",
               "  shares                                    List active share links",
               "  invites                                   List invite keys",
-              "  invite create [member|group_admin] [uses] [note]   Mint a new invite key",
-              "  banner <broadcast|notice|warning|error> [--pinned] <message...>",
-              "  banner list | banner clear <id|all>       Manage sticky banners",
+              "  invite create [--role member|group_admin] [--uses N] [--expires H] [note...]",
+              "  banner <broadcast|notice|warning|error> [--title \"...\"] [--pinned] [--expires H] <message...>",
+              "    Examples:",
+              "      banner error --pinned --title \"Maintenance\" Restarting in 5m",
+              "      banner warning GPU host offline for updates",
+              "      banner notice New shared folder added",
+              "  banner list | banner clear <id|all>       Inspect or remove sticky banners",
               "  audit [core|download|preview] [limit]     Tail recent audit log entries",
               "  goto <explorer|converter|shares|contribution|admin>  Jump to panel",
               "  theme <dark|light>                        Switch UI color scheme",
@@ -244,23 +248,58 @@ export function AdminDevConsole({
 
         case "invite": {
           if (args[1]?.toLowerCase() !== "create") {
-            push("warn", "Usage: invite create [member|group_admin] [max_uses] [note...]");
+            push("warn", "Usage: invite create [--role member|group_admin|host_admin] [--uses N] [--expires H] [note...]");
             break;
           }
-          const role = args[2] === "group_admin" || args[2] === "host_admin" ? args[2] : "member";
-          const maxUses = args[3] && !Number.isNaN(Number(args[3])) ? Math.max(1, Number(args[3])) : 1;
-          const note = args.slice(4).join(" ");
-          const res = await api.createInvite({ role, max_uses: maxUses, expires_in_hours: 72, note });
+          let role = "member";
+          let maxUses = 1;
+          let expiresInHours = 72;
+          const noteParts: string[] = [];
+          for (let i = 2; i < args.length; i++) {
+            const tok = args[i];
+            if ((tok === "--role" || tok === "-r") && args[i + 1]) {
+              role = args[++i];
+            } else if ((tok === "--uses" || tok === "-u") && args[i + 1]) {
+              maxUses = Math.max(1, Number(args[++i]) || 1);
+            } else if ((tok === "--expires" || tok === "-e") && args[i + 1]) {
+              expiresInHours = Math.max(0, Number(args[++i]) || 0);
+            } else if ((tok === "--note" || tok === "-n") && args[i + 1]) {
+              noteParts.push(args[++i]);
+            } else if (tok.startsWith("-")) {
+              push("err", `Unknown flag '${tok}'. Use --role, --uses, --expires, or --note.`);
+              return;
+            } else if (i === 2 && (tok === "member" || tok === "group_admin" || tok === "host_admin")) {
+              role = tok;
+            } else if ((i === 2 || i === 3) && /^\d+$/.test(tok)) {
+              maxUses = Math.max(1, Number(tok));
+            } else {
+              noteParts.push(tok);
+            }
+          }
+          const res = await api.createInvite({
+            role,
+            max_uses: maxUses,
+            expires_in_hours: expiresInHours,
+            note: noteParts.join(" "),
+          });
           const link = `${window.location.origin}/?invite=${encodeURIComponent(res.invite.code || "")}`;
-          push("ok", `Created invite key: ${res.invite.code}\nLink: ${link}`);
+          push("ok", `Created [${role}, uses=${maxUses}] invite key: ${res.invite.code}\nLink: ${link}`);
           break;
         }
 
         case "banner":
         case "broadcast": {
           const sub = args[1]?.toLowerCase();
-          if (!sub) {
-            push("warn", "Usage: banner <broadcast|notice|warning|error> [--pinned] <message...> | banner list | banner clear <id|all>");
+          if (!sub || sub === "help" || sub === "--help" || sub === "-h") {
+            push(
+              "warn",
+              [
+                "Usage: banner <broadcast|notice|warning|error> [--title \"...\"] [--pinned] [--expires H] <message...>",
+                "  Aliases: warn -> warning, err/alert -> error, info/notification -> notice",
+                "  Subcommands: banner list | banner clear <id-prefix|all>",
+                "  Example: banner error --pinned --title \"Restart\" Hub restarting in 5m",
+              ].join("\n"),
+            );
             break;
           }
           if (sub === "list") {
@@ -299,28 +338,74 @@ export function AdminDevConsole({
             push("ok", `Cleared ${matches.length} banner(s).`);
             break;
           }
-          const validKinds: AnnouncementKind[] = ["broadcast", "notice", "warning", "error"];
-          const kind: AnnouncementKind = validKinds.includes(sub as AnnouncementKind)
-            ? (sub as AnnouncementKind)
-            : "broadcast";
-          const rest = validKinds.includes(sub as AnnouncementKind) ? args.slice(2) : args.slice(1);
+
+          const kindAliases: Record<string, AnnouncementKind> = {
+            broadcast: "broadcast",
+            admin: "broadcast",
+            announce: "broadcast",
+            notice: "notice",
+            notification: "notice",
+            info: "notice",
+            warning: "warning",
+            warn: "warning",
+            error: "error",
+            err: "error",
+            critical: "error",
+            alert: "error",
+          };
+
+          let kind: AnnouncementKind = "broadcast";
+          let startIdx = 1;
+          if (kindAliases[sub]) {
+            kind = kindAliases[sub];
+            startIdx = 2;
+          }
+
+          let title = "";
           let dismissible = true;
+          let expiresInHours = 0;
           const bodyParts: string[] = [];
-          for (const tok of rest) {
-            if (tok === "--pinned") {
+
+          for (let i = startIdx; i < args.length; i++) {
+            const tok = args[i];
+            const lower = tok.toLowerCase();
+            if (lower === "--pinned" || lower === "-p") {
               dismissible = false;
+            } else if ((lower === "--title" || lower === "-t") && args[i + 1]) {
+              title = args[++i];
+            } else if ((lower === "--kind" || lower === "-k" || lower === "--type") && args[i + 1]) {
+              const k = kindAliases[args[++i].toLowerCase()];
+              if (!k) {
+                push("err", "Invalid banner kind. Use: broadcast, notice, warning, or error.");
+                return;
+              }
+              kind = k;
+            } else if ((lower === "--expires" || lower === "-e") && args[i + 1]) {
+              expiresInHours = Math.max(0, Number(args[++i]) || 0);
+            } else if (lower.startsWith("--") && kindAliases[lower.slice(2)]) {
+              kind = kindAliases[lower.slice(2)];
+            } else if (lower.startsWith("-")) {
+              push("err", `Unknown flag '${tok}'. Run 'banner help' for valid options.`);
+              return;
             } else {
               bodyParts.push(tok);
             }
           }
+
           const body = bodyParts.join(" ").trim();
           if (!body) {
-            push("err", "Banner message text is required.");
+            push("err", "Banner message text is required. Example: banner error Hub restarting soon");
             break;
           }
-          await api.createAnnouncement({ kind, body, dismissible });
+          await api.createAnnouncement({
+            title: title || undefined,
+            kind,
+            body,
+            dismissible,
+            expires_in_hours: expiresInHours,
+          });
           await onRefreshAnnouncements();
-          push("ok", `Published [${kind}] banner${dismissible ? "" : " (pinned)"}: ${body}`);
+          push("ok", `Published [${kind}] banner${dismissible ? "" : " (pinned)"}${title ? ` "${title}"` : ""}: ${body}`);
           break;
         }
 
