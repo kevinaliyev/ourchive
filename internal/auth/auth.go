@@ -761,3 +761,52 @@ func (s *Service) RequireRoles(roles []string, next http.HandlerFunc) http.Handl
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 	})
 }
+
+func (s *Service) GetUserByID(ctx context.Context, userID string) (*User, error) {
+	var u User
+	var email, username, invitedBy, inviteKeyID sql.NullString
+	var canInvite int
+	err := s.store.DB.QueryRowContext(ctx, `
+		SELECT id, email, COALESCE(username, ''), display_name, role,
+		       COALESCE(invited_by, ''), COALESCE(invite_key_id, ''),
+		       COALESCE(can_invite, 0), COALESCE(invite_quota, 0), created_at
+		FROM users WHERE id = ?
+	`, userID).Scan(&u.ID, &email, &username, &u.DisplayName, &u.Role, &invitedBy, &inviteKeyID, &canInvite, &u.InviteQuota, &u.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	u.Email = normalizeEmailForOutput(email.String)
+	u.Username = username.String
+	u.InvitedBy = invitedBy.String
+	u.InviteKeyID = inviteKeyID.String
+	u.CanInvite = canInvite != 0
+	return &u, nil
+}
+
+func (s *Service) UpdateProfile(ctx context.Context, userID, username, displayName string) (*User, error) {
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" {
+		return nil, errors.New("display name cannot be empty")
+	}
+	normUser := NormalizeUsername(username)
+	if normUser != "" && !usernameRe.MatchString(normUser) {
+		return nil, errors.New("username must be 2–32 characters (letters, numbers, ., _, -)")
+	}
+	var userVal any = nil
+	if normUser != "" {
+		userVal = normUser
+	}
+	_, err := s.store.DB.ExecContext(ctx, `
+		UPDATE users SET username = ?, display_name = ? WHERE id = ?
+	`, userVal, displayName, userID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return nil, ErrUserExists
+		}
+		return nil, err
+	}
+	return s.GetUserByID(ctx, userID)
+}

@@ -36,16 +36,36 @@ type EdgeStorageConfig struct {
 	TTLHours      int    `json:"ttl_hours"`
 }
 
+// OIDCProviderConfig configures a pluggable OpenID Connect identity provider
+// (e.g. Google, Authentik, Keycloak, Authelia, Pocket ID, Discord/Custom OIDC).
+type OIDCProviderConfig struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Enabled         bool   `json:"enabled"`
+	IssuerURL       string `json:"issuer_url"`
+	ClientID        string `json:"client_id"`
+	ClientSecret    string `json:"client_secret,omitempty"`
+	HasClientSecret bool   `json:"has_client_secret"`
+	Scopes          string `json:"scopes"`
+}
+
+// PublicOIDCProvider is the non-secret summary exposed on the login screen.
+type PublicOIDCProvider struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // HubSettings holds the live Host Admin policy for P2P, Hub relay fallback,
-// opt-in edge storage, invite-only registration, and tiered audit logging.
+// opt-in edge storage, invite-only registration, OIDC/Passkeys, and tiered audit logging.
 type HubSettings struct {
-	P2PEnabled         bool              `json:"p2p_enabled"`
-	STUNServers        []string          `json:"stun_servers"`
-	AllowRelayFallback bool              `json:"allow_relay_fallback"`
-	AllowShareRelay    bool              `json:"allow_share_relay"`
-	MaxRelayFileMB     int               `json:"max_relay_file_mb"`
-	RelayCapMbps       int               `json:"relay_cap_mbps"`
-	EdgeStorage        EdgeStorageConfig `json:"edge_storage"`
+	P2PEnabled         bool                 `json:"p2p_enabled"`
+	STUNServers        []string             `json:"stun_servers"`
+	AllowRelayFallback bool                 `json:"allow_relay_fallback"`
+	AllowShareRelay    bool                 `json:"allow_share_relay"`
+	MaxRelayFileMB     int                  `json:"max_relay_file_mb"`
+	RelayCapMbps       int                  `json:"relay_cap_mbps"`
+	EdgeStorage        EdgeStorageConfig    `json:"edge_storage"`
+	OIDCProviders      []OIDCProviderConfig `json:"oidc_providers"`
 
 	// Registration & invite policy
 	AuthIdentityMode       string `json:"auth_identity_mode"` // email_or_username | email_only | username_only | both
@@ -146,14 +166,42 @@ func (s *Store) Get() HubSettings {
 	defer s.mu.RUnlock()
 	cp := s.cur
 	cp.EdgeStorage.HasSecretKey = cp.EdgeStorage.SecretKey != ""
+	if len(s.cur.OIDCProviders) > 0 {
+		cp.OIDCProviders = make([]OIDCProviderConfig, len(s.cur.OIDCProviders))
+		for i, p := range s.cur.OIDCProviders {
+			p.HasClientSecret = p.ClientSecret != ""
+			cp.OIDCProviders[i] = p
+		}
+	} else {
+		cp.OIDCProviders = []OIDCProviderConfig{}
+	}
 	return cp
 }
 
-// GetRedacted returns settings safe to serialize to the Host Admin UI (secret key stripped).
+// GetRedacted returns settings safe to serialize to the Host Admin UI (secret keys stripped).
 func (s *Store) GetRedacted() HubSettings {
 	cp := s.Get()
 	cp.EdgeStorage.SecretKey = ""
+	for i := range cp.OIDCProviders {
+		cp.OIDCProviders[i].ClientSecret = ""
+	}
 	return cp
+}
+
+// PublicOIDCProviders returns enabled OIDC providers (ID + Name only) for the login screen.
+func (s *Store) PublicOIDCProviders() []PublicOIDCProvider {
+	cur := s.Get()
+	out := []PublicOIDCProvider{}
+	for _, p := range cur.OIDCProviders {
+		if p.Enabled && p.ID != "" && p.IssuerURL != "" && p.ClientID != "" {
+			name := p.Name
+			if name == "" {
+				name = p.ID
+			}
+			out = append(out, PublicOIDCProvider{ID: p.ID, Name: name})
+		}
+	}
+	return out
 }
 
 // Public returns the non-sensitive network & policy config for any authenticated user.
@@ -199,6 +247,25 @@ func (s *Store) Save(ctx context.Context, next HubSettings) (HubSettings, error)
 	if next.EdgeStorage.SecretKey == "" {
 		next.EdgeStorage.SecretKey = s.cur.EdgeStorage.SecretKey
 	}
+	// Preserve existing OIDC client secrets when left blank in admin updates.
+	existingSecrets := map[string]string{}
+	for _, p := range s.cur.OIDCProviders {
+		if p.ID != "" && p.ClientSecret != "" {
+			existingSecrets[p.ID] = p.ClientSecret
+		}
+	}
+	cleanedOIDC := make([]OIDCProviderConfig, 0, len(next.OIDCProviders))
+	for _, p := range next.OIDCProviders {
+		if p.ID == "" {
+			continue
+		}
+		if p.ClientSecret == "" {
+			p.ClientSecret = existingSecrets[p.ID]
+		}
+		p.HasClientSecret = p.ClientSecret != ""
+		cleanedOIDC = append(cleanedOIDC, p)
+	}
+	next.OIDCProviders = cleanedOIDC
 	next.AuthIdentityMode = NormalizeIdentityMode(next.AuthIdentityMode)
 
 	raw, err := json.Marshal(next)
@@ -216,5 +283,11 @@ func (s *Store) Save(ctx context.Context, next HubSettings) (HubSettings, error)
 	redacted := next
 	redacted.EdgeStorage.HasSecretKey = next.EdgeStorage.SecretKey != ""
 	redacted.EdgeStorage.SecretKey = ""
+	redacted.OIDCProviders = make([]OIDCProviderConfig, len(next.OIDCProviders))
+	for i, p := range next.OIDCProviders {
+		p.HasClientSecret = p.ClientSecret != ""
+		p.ClientSecret = ""
+		redacted.OIDCProviders[i] = p
+	}
 	return redacted, nil
 }

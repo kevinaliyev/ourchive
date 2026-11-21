@@ -50,20 +50,20 @@ interface ConverterViewProps {
 type PresetId = "web_fast" | "discord_10mb" | "high_quality";
 
 const FORMATS_BY_KIND: Record<QueuedFile["kind"], string[]> = {
-  video: ["mp4", "webm", "gif", "mp3", "wav", "mkv"],
-  audio: ["mp3", "m4a", "ogg", "wav", "flac"],
-  image: ["webp", "jpg", "png", "avif"],
-  doc: ["html", "csv", "json", "txt"],
-  other: ["mp4", "mp3", "webp", "png"],
+  video: ["mp4", "webm", "mkv", "mov", "avi", "flv", "wmv", "m4v", "ts", "3gp", "ogv", "gif", "mp3", "wav", "opus"],
+  audio: ["mp3", "wav", "flac", "ogg", "opus", "m4a", "aac", "wma", "aiff", "ac3"],
+  image: ["webp", "png", "jpg", "avif", "bmp", "ico", "tiff", "tga", "ppm"],
+  doc: ["pdf", "docx", "odt", "epub", "rtf", "html", "md", "txt", "csv", "json", "xml", "yaml"],
+  other: ["mp4", "mp3", "webp", "png", "pdf", "docx", "txt"],
 };
 
 function detectKind(file: File): QueuedFile["kind"] {
   const mime = file.type.toLowerCase();
-  const ext = file.name.slice(file.name.lastIndexOf(".") + 1).toLowerCase();
-  if (mime.startsWith("video/") || ["mp4", "mkv", "mov", "webm", "avi", "m4v"].includes(ext)) return "video";
-  if (mime.startsWith("audio/") || ["mp3", "wav", "flac", "ogg", "opus", "m4a"].includes(ext)) return "audio";
-  if (mime.startsWith("image/") || ["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif", "svg"].includes(ext)) return "image";
-  if (["md", "txt", "json", "csv"].includes(ext) || mime.startsWith("text/")) return "doc";
+  const ext = file.name.includes(".") ? file.name.slice(file.name.lastIndexOf(".") + 1).toLowerCase() : "";
+  if (mime.startsWith("video/") || ["mp4", "mkv", "mov", "webm", "avi", "flv", "wmv", "m4v", "ts", "3gp", "ogv"].includes(ext)) return "video";
+  if (mime.startsWith("audio/") || ["mp3", "wav", "flac", "ogg", "opus", "m4a", "aac", "wma", "aiff", "ac3"].includes(ext)) return "audio";
+  if (mime.startsWith("image/") || ["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif", "svg", "tiff", "tif", "ico", "heic", "heif", "tga", "ppm"].includes(ext)) return "image";
+  if (["pdf", "docx", "doc", "odt", "epub", "rtf", "md", "markdown", "txt", "html", "htm", "json", "csv", "xml", "yaml", "yml", "pptx", "xlsx"].includes(ext) || mime.startsWith("text/")) return "doc";
   return "other";
 }
 

@@ -236,7 +236,7 @@ func BuildFFmpegArgs(inputPath, outputPath, format, preset string, hwEncoders []
 	usedEncoder := "ffmpeg"
 
 	switch format {
-	case "mp4", "mov", "mkv":
+	case "mp4", "mov", "mkv", "m4v", "ts", "flv":
 		vEnc := SelectH264Encoder(hwEncoders)
 		usedEncoder = vEnc
 		args = append(args, "-c:v", vEnc)
@@ -269,9 +269,22 @@ func BuildFFmpegArgs(inputPath, outputPath, format, preset string, hwEncoders []
 		if vEnc == "libx264" {
 			args = append(args, "-pix_fmt", "yuv420p", "-preset", "fast")
 		}
-		if format == "mp4" || format == "mov" {
+		if format == "mp4" || format == "mov" || format == "m4v" {
 			args = append(args, "-movflags", "+faststart")
 		}
+
+	case "avi":
+		usedEncoder = "mpeg4"
+		args = append(args, "-c:v", "mpeg4", "-q:v", "4", "-c:a", "libmp3lame", "-q:a", "3")
+	case "wmv":
+		usedEncoder = "wmv2"
+		args = append(args, "-c:v", "wmv2", "-b:v", "2500k", "-c:a", "wmav2", "-b:a", "128k")
+	case "3gp":
+		usedEncoder = "libx264"
+		args = append(args, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-vf", "scale='min(640,iw)':-2", "-c:a", "aac", "-b:a", "96k")
+	case "ogv":
+		usedEncoder = "libtheora"
+		args = append(args, "-c:v", "libtheora", "-q:v", "6", "-c:a", "libvorbis", "-q:a", "4")
 
 	case "webm":
 		usedEncoder = "libvpx-vp9"
@@ -296,9 +309,24 @@ func BuildFFmpegArgs(inputPath, outputPath, format, preset string, hwEncoders []
 	case "ogg":
 		usedEncoder = "libopus"
 		args = append(args, "-vn", "-c:a", "libopus", "-b:a", "128k")
+	case "opus":
+		usedEncoder = "libopus"
+		args = append(args, "-vn", "-c:a", "libopus", "-b:a", "128k")
 	case "m4a":
 		usedEncoder = "aac"
 		args = append(args, "-vn", "-c:a", "aac", "-b:a", "192k")
+	case "aac":
+		usedEncoder = "aac"
+		args = append(args, "-vn", "-c:a", "aac", "-b:a", "192k")
+	case "wma":
+		usedEncoder = "wmav2"
+		args = append(args, "-vn", "-c:a", "wmav2", "-b:a", "192k")
+	case "aiff":
+		usedEncoder = "pcm_s16be"
+		args = append(args, "-vn", "-c:a", "pcm_s16be")
+	case "ac3":
+		usedEncoder = "ac3"
+		args = append(args, "-vn", "-c:a", "ac3", "-b:a", "192k")
 
 	case "webp":
 		usedEncoder = "libwebp"
@@ -312,6 +340,21 @@ func BuildFFmpegArgs(inputPath, outputPath, format, preset string, hwEncoders []
 	case "avif":
 		usedEncoder = "libaom-av1"
 		args = append(args, "-frames:v", "1", "-c:v", "libaom-av1", "-still-picture", "1", "-crf", "30")
+	case "bmp":
+		usedEncoder = "bmp"
+		args = append(args, "-frames:v", "1", "-c:v", "bmp")
+	case "tiff", "tif":
+		usedEncoder = "tiff"
+		args = append(args, "-frames:v", "1", "-c:v", "tiff")
+	case "ico":
+		usedEncoder = "ico"
+		args = append(args, "-frames:v", "1", "-vf", "scale='min(256,iw)':'min(256,ih)':force_original_aspect_ratio=decrease")
+	case "tga":
+		usedEncoder = "targa"
+		args = append(args, "-frames:v", "1", "-c:v", "targa")
+	case "ppm":
+		usedEncoder = "ppm"
+		args = append(args, "-frames:v", "1", "-c:v", "ppm")
 	}
 
 	args = append(args, outputPath)
@@ -336,13 +379,8 @@ func NewConvertRunner(caps protocol.ComputeCapabilities) *ConvertRunner {
 }
 
 // ServeHTTP handles `POST /compute/convert?format=mp4&preset=discord_10mb&filename=clip.mkv`
-// by reading the input stream, running hardware ffmpeg, and streaming the converted output back.
+// by reading the input stream, running hardware ffmpeg or the built-in document engine, and streaming the output back.
 func (cr *ConvertRunner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if cr.Caps.FFmpegPath == "" {
-		http.Error(w, `{"error":"ffmpeg is not available on this machine"}`, http.StatusServiceUnavailable)
-		return
-	}
-
 	format := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(r.URL.Query().Get("format")), "."))
 	preset := strings.TrimSpace(r.URL.Query().Get("preset"))
 	origName := strings.TrimSpace(r.URL.Query().Get("filename"))
@@ -352,6 +390,11 @@ func (cr *ConvertRunner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if origName == "" {
 		origName = "input.bin"
+	}
+	isDoc := IsDocumentFormat(format)
+	if !isDoc && cr.Caps.FFmpegPath == "" {
+		http.Error(w, `{"error":"ffmpeg is not available on this machine"}`, http.StatusServiceUnavailable)
+		return
 	}
 
 	select {
@@ -388,30 +431,41 @@ func (cr *ConvertRunner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	outPath := filepath.Join(tmpDir, "output."+format)
 
 	start := time.Now()
-	dur := ProbeDurationSeconds(r.Context(), inPath)
-	args, usedEnc := BuildFFmpegArgs(inPath, outPath, format, preset, cr.Caps.HWEncoders, dur)
-
 	convCtx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
 
-	var stderr bytes.Buffer
-	cmd := exec.CommandContext(convCtx, cr.Caps.FFmpegPath, args...)
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		// If a hardware encoder failed mid-run, retry once with software libx264 for video formats.
-		if strings.Contains(usedEnc, "nvenc") || strings.Contains(usedEnc, "amf") || strings.Contains(usedEnc, "qsv") {
-			stderr.Reset()
-			swArgs, swEnc := BuildFFmpegArgs(inPath, outPath, format, preset, nil, dur)
-			swCmd := exec.CommandContext(convCtx, cr.Caps.FFmpegPath, swArgs...)
-			swCmd.Stderr = &stderr
-			if swErr := swCmd.Run(); swErr != nil {
-				writeJSONErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("ffmpeg failed: %s", trimErr(stderr.String(), swErr)))
+	var usedEnc string
+	if isDoc {
+		docEnc, docErr := ConvertDocument(convCtx, inPath, outPath, inExt, format, baseName)
+		if docErr != nil {
+			writeJSONErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("document conversion failed: %s", docErr.Error()))
+			return
+		}
+		usedEnc = docEnc
+	} else {
+		dur := ProbeDurationSeconds(r.Context(), inPath)
+		var args []string
+		args, usedEnc = BuildFFmpegArgs(inPath, outPath, format, preset, cr.Caps.HWEncoders, dur)
+
+		var stderr bytes.Buffer
+		cmd := exec.CommandContext(convCtx, cr.Caps.FFmpegPath, args...)
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			// If a hardware encoder failed mid-run, retry once with software libx264 for video formats.
+			if strings.Contains(usedEnc, "nvenc") || strings.Contains(usedEnc, "amf") || strings.Contains(usedEnc, "qsv") {
+				stderr.Reset()
+				swArgs, swEnc := BuildFFmpegArgs(inPath, outPath, format, preset, nil, dur)
+				swCmd := exec.CommandContext(convCtx, cr.Caps.FFmpegPath, swArgs...)
+				swCmd.Stderr = &stderr
+				if swErr := swCmd.Run(); swErr != nil {
+					writeJSONErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("ffmpeg failed: %s", trimErr(stderr.String(), swErr)))
+					return
+				}
+				usedEnc = swEnc
+			} else {
+				writeJSONErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("ffmpeg failed: %s", trimErr(stderr.String(), err)))
 				return
 			}
-			usedEnc = swEnc
-		} else {
-			writeJSONErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("ffmpeg failed: %s", trimErr(stderr.String(), err)))
-			return
 		}
 	}
 
@@ -484,6 +538,48 @@ func mimeForFormat(format string) string {
 		return "image/jpeg"
 	case "avif":
 		return "image/avif"
+	case "bmp":
+		return "image/bmp"
+	case "tiff", "tif":
+		return "image/tiff"
+	case "ico":
+		return "image/x-icon"
+	case "avi":
+		return "video/x-msvideo"
+	case "flv":
+		return "video/x-flv"
+	case "wmv":
+		return "video/x-ms-wmv"
+	case "opus":
+		return "audio/opus"
+	case "aac":
+		return "audio/aac"
+	case "aiff":
+		return "audio/aiff"
+	case "pdf":
+		return "application/pdf"
+	case "docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case "odt":
+		return "application/vnd.oasis.opendocument.text"
+	case "epub":
+		return "application/epub+zip"
+	case "rtf":
+		return "application/rtf"
+	case "html", "htm":
+		return "text/html; charset=utf-8"
+	case "md", "markdown":
+		return "text/markdown; charset=utf-8"
+	case "txt":
+		return "text/plain; charset=utf-8"
+	case "csv":
+		return "text/csv; charset=utf-8"
+	case "json":
+		return "application/json"
+	case "xml":
+		return "application/xml"
+	case "yaml", "yml":
+		return "application/yaml"
 	default:
 		return "application/octet-stream"
 	}

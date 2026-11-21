@@ -99,11 +99,31 @@ export function App() {
     void refreshShares();
     void refreshNetConfig();
     void refreshAnnouncements();
+
+    // Real-time Server-Sent Events subscription for instant node traffic, status, and broadcasts.
+    let es: EventSource | null = null;
+    try {
+      es = new EventSource("/api/events");
+      es.addEventListener("nodes.updated", () => {
+        void refreshNodes();
+      });
+      es.addEventListener("announcements.updated", () => {
+        void refreshAnnouncements();
+      });
+      es.addEventListener("shares.updated", () => {
+        void refreshShares();
+      });
+    } catch {}
+
+    // Low-frequency fallback safety poll in case SSE drops behind a strict proxy.
     const timer = window.setInterval(() => {
       void refreshNodes();
       void refreshAnnouncements();
-    }, 5000);
-    return () => window.clearInterval(timer);
+    }, 15000);
+    return () => {
+      window.clearInterval(timer);
+      es?.close();
+    };
   }, [auth?.user, refreshNodes, refreshShares, refreshNetConfig, refreshAnnouncements]);
 
   function handleDismissBanner(id: string) {

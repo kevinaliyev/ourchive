@@ -605,6 +605,173 @@ export function SettingsView({
               </div>
             </div>
           </section>
+
+          <section className="section-block" style={{ marginTop: 18 }}>
+            <div className="section-head">
+              <div>
+                <h2 className="section-title">OpenID Connect (OIDC) Providers</h2>
+                <p className="inline-muted" style={{ margin: "2px 0 0" }}>
+                  Optional SSO login buttons (Google, Authentik, Keycloak, Pocket ID, etc.). New users still require an invite key.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn"
+                onClick={() =>
+                  setAdminCfg({
+                    ...adminCfg,
+                    oidc_providers: [
+                      ...(adminCfg.oidc_providers ?? []),
+                      {
+                        id: `oidc-${(adminCfg.oidc_providers?.length ?? 0) + 1}`,
+                        name: "SSO Provider",
+                        enabled: true,
+                        issuer_url: "",
+                        client_id: "",
+                        client_secret: "",
+                        has_client_secret: false,
+                        scopes: "openid email profile",
+                      },
+                    ],
+                  })
+                }
+              >
+                Add OIDC provider
+              </button>
+            </div>
+            <div className="card" style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+              {(adminCfg.oidc_providers ?? []).length === 0 ? (
+                <p className="inline-muted" style={{ margin: 0 }}>
+                  No external OIDC providers configured. Passkeys (WebAuthn) and local password login are enabled by default.
+                </p>
+              ) : (
+                (adminCfg.oidc_providers ?? []).map((prov, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      border: "1px solid var(--border)",
+                      borderRadius: 8,
+                      padding: 12,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 10,
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={prov.enabled}
+                          onChange={(e) => {
+                            const next = [...(adminCfg.oidc_providers ?? [])];
+                            next[idx] = { ...prov, enabled: e.target.checked };
+                            setAdminCfg({ ...adminCfg, oidc_providers: next });
+                          }}
+                        />
+                        <strong>{prov.name || prov.id}</strong>
+                      </label>
+                      <button
+                        type="button"
+                        className="btn btn-danger"
+                        onClick={() => {
+                          const next = (adminCfg.oidc_providers ?? []).filter((_, i) => i !== idx);
+                          setAdminCfg({ ...adminCfg, oidc_providers: next });
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                    <div className="form-grid-2">
+                      <div className="field">
+                        <label>Provider ID (slug)</label>
+                        <input
+                          type="text"
+                          className="mono"
+                          value={prov.id}
+                          onChange={(e) => {
+                            const next = [...(adminCfg.oidc_providers ?? [])];
+                            next[idx] = { ...prov, id: e.target.value };
+                            setAdminCfg({ ...adminCfg, oidc_providers: next });
+                          }}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Display Name</label>
+                        <input
+                          type="text"
+                          value={prov.name}
+                          onChange={(e) => {
+                            const next = [...(adminCfg.oidc_providers ?? [])];
+                            next[idx] = { ...prov, name: e.target.value };
+                            setAdminCfg({ ...adminCfg, oidc_providers: next });
+                          }}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Issuer URL</label>
+                        <input
+                          type="text"
+                          className="mono"
+                          placeholder="https://accounts.google.com"
+                          value={prov.issuer_url}
+                          onChange={(e) => {
+                            const next = [...(adminCfg.oidc_providers ?? [])];
+                            next[idx] = { ...prov, issuer_url: e.target.value };
+                            setAdminCfg({ ...adminCfg, oidc_providers: next });
+                          }}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Client ID</label>
+                        <input
+                          type="text"
+                          className="mono"
+                          value={prov.client_id}
+                          onChange={(e) => {
+                            const next = [...(adminCfg.oidc_providers ?? [])];
+                            next[idx] = { ...prov, client_id: e.target.value };
+                            setAdminCfg({ ...adminCfg, oidc_providers: next });
+                          }}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Client Secret</label>
+                        <input
+                          type="password"
+                          autoComplete="new-password"
+                          placeholder={prov.has_client_secret ? "•••••••• (saved; leave blank to keep)" : "Enter client secret"}
+                          value={prov.client_secret ?? ""}
+                          onChange={(e) => {
+                            const next = [...(adminCfg.oidc_providers ?? [])];
+                            next[idx] = { ...prov, client_secret: e.target.value };
+                            setAdminCfg({ ...adminCfg, oidc_providers: next });
+                          }}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>Scopes</label>
+                        <input
+                          type="text"
+                          className="mono"
+                          value={prov.scopes}
+                          onChange={(e) => {
+                            const next = [...(adminCfg.oidc_providers ?? [])];
+                            next[idx] = { ...prov, scopes: e.target.value };
+                            setAdminCfg({ ...adminCfg, oidc_providers: next });
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+              <div className="modal-actions">
+                <button type="submit" className="btn btn-primary" disabled={saving}>
+                  {saving ? "Saving…" : "Save settings"}
+                </button>
+              </div>
+            </div>
+          </section>
         </form>
       )}
     </div>

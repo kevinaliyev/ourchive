@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -87,7 +89,9 @@ func NewAgentServer(getConfig func() ConfigSnapshot, meter *TrafficMeter) *Agent
 	s.mux.HandleFunc("POST /vfs/relocate", s.handleRelocate)
 	s.mux.HandleFunc("PUT /vfs/{mountId}/file", s.handlePutFile)
 	s.mux.HandleFunc("POST /vfs/{mountId}/mkdir", s.handleMkdir)
+	s.mux.HandleFunc("POST /vfs/{mountId}/rename", s.handleRename)
 	s.mux.HandleFunc("DELETE /vfs/{mountId}/entry", s.handleDelete)
+	s.mux.HandleFunc("GET /vfs/search", s.handleSearch)
 	s.mux.HandleFunc("POST /vfs/pick-folder", s.handlePickFolder)
 	s.mux.HandleFunc("POST /vfs/pick-file", s.handlePickFile)
 	s.mux.HandleFunc("POST /vfs/{mountId}/reveal", s.handleReveal)
@@ -334,11 +338,14 @@ func (s *AgentServer) handleList(w http.ResponseWriter, r *http.Request) {
 
 	entries := make([]protocol.FileEntry, 0, len(dirEntries))
 	for _, de := range dirEntries {
+		name := de.Name()
+		if strings.HasSuffix(name, partFileSuffix) {
+			continue
+		}
 		info, err := de.Info()
 		if err != nil {
 			continue
 		}
-		name := de.Name()
 		entryPath := name
 		if rel != "" {
 			entryPath = rel + "/" + name
@@ -394,6 +401,8 @@ func (s *AgentServer) handleGetFile(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, info.Name()))
 	}
 	w.Header().Set("Content-Type", detectMimeByExt(info.Name()))
+	w.Header().Set("ETag", fmt.Sprintf(`"%s"`, fileETag(info)))
+	w.Header().Set("Accept-Ranges", "bytes")
 
 	var dst http.ResponseWriter = w
 	if s.Meter != nil || cfg.UploadCapMbps > 0 {
@@ -433,21 +442,52 @@ func (s *AgentServer) handlePutFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	f, err := root.Create(filepath.FromSlash(rel))
-	if err != nil {
-		writeVFSError(w, err)
-		return
+	partRel := rel + partFileSuffix
+	partOS := filepath.FromSlash(partRel)
+	resumeMode := r.URL.Query().Get("resume") == "1"
+	isFinal := r.URL.Query().Get("final") != "0"
+
+	var f *os.File
+	var existingBytes int64
+	if resumeMode {
+		if info, statErr := root.Stat(partOS); statErr == nil && !info.IsDir() {
+			if opened, openErr := root.OpenFile(partOS, os.O_WRONLY|os.O_APPEND, 0o644); openErr == nil {
+				f = opened
+				existingBytes = info.Size()
+			}
+		}
+	}
+	if f == nil {
+		created, createErr := root.Create(partOS)
+		if createErr != nil {
+			writeVFSError(w, createErr)
+			return
+		}
+		f = created
 	}
 
 	written, copyErr := io.Copy(f, r.Body)
+	syncErr := f.Sync()
 	closeErr := f.Close()
 	if copyErr != nil {
+		// Leave .ourchive.part on disk so the client can safely resume!
 		writeVFSError(w, copyErr)
+		return
+	}
+	if syncErr != nil {
+		writeVFSError(w, syncErr)
 		return
 	}
 	if closeErr != nil {
 		writeVFSError(w, closeErr)
 		return
+	}
+
+	if isFinal {
+		if err := root.Rename(partOS, filepath.FromSlash(rel)); err != nil {
+			writeVFSError(w, err)
+			return
+		}
 	}
 
 	if s.Meter != nil {
@@ -457,8 +497,10 @@ func (s *AgentServer) handlePutFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"path":  rel,
-		"bytes": written,
+		"path":    rel,
+		"bytes":   existingBytes + written,
+		"resumed": resumeMode && existingBytes > 0,
+		"final":   isFinal,
 	})
 }
 
@@ -515,6 +557,152 @@ func (s *AgentServer) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+func (s *AgentServer) handleRename(w http.ResponseWriter, r *http.Request) {
+	if s.GetConfig().ReadOnly {
+		http.Error(w, `{"error":"agent is running in read-only mode"}`, http.StatusForbidden)
+		return
+	}
+	root, _, err := s.openMountRoot(r.PathValue("mountId"))
+	if err != nil {
+		writeVFSError(w, err)
+		return
+	}
+	defer root.Close()
+
+	var req struct {
+		From string `json:"from"`
+		To   string `json:"to"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON body"}`, http.StatusBadRequest)
+		return
+	}
+	fromRel, err := CleanRelPath(req.From)
+	if err != nil || fromRel == "" {
+		http.Error(w, `{"error":"valid source path is required"}`, http.StatusBadRequest)
+		return
+	}
+	toRel, err := CleanRelPath(req.To)
+	if err != nil || toRel == "" {
+		http.Error(w, `{"error":"valid destination path is required"}`, http.StatusBadRequest)
+		return
+	}
+	if dir := path.Dir(toRel); dir != "." && dir != "" {
+		if err := root.MkdirAll(filepath.FromSlash(dir), 0o755); err != nil {
+			writeVFSError(w, err)
+			return
+		}
+	}
+	if err := root.Rename(filepath.FromSlash(fromRel), filepath.FromSlash(toRel)); err != nil {
+		writeVFSError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "from": fromRel, "to": toRel})
+}
+
+type SearchHit struct {
+	MountID   string `json:"mount_id"`
+	MountName string `json:"mount_name"`
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	IsDir     bool   `json:"is_dir"`
+	Size      int64  `json:"size"`
+	ModTime   string `json:"mod_time"`
+	MimeType  string `json:"mime_type"`
+}
+
+func (s *AgentServer) handleSearch(w http.ResponseWriter, r *http.Request) {
+	cfg := s.GetConfig()
+	if cfg.Paused {
+		writeVFSError(w, errPaused)
+		return
+	}
+	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	if q == "" {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"hits": []SearchHit{}})
+		return
+	}
+	limit := 80
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 250 {
+			limit = n
+		}
+	}
+
+	hits := make([]SearchHit, 0, 32)
+	for _, m := range cfg.Mounts {
+		if len(hits) >= limit {
+			break
+		}
+		if !m.Enabled || m.Rejected {
+			continue
+		}
+		resolved, err := ExpandLocalPath(m.LocalPath)
+		if err != nil {
+			continue
+		}
+		if m.Kind == "file" {
+			base := filepath.Base(resolved)
+			if strings.Contains(strings.ToLower(base), q) || strings.Contains(strings.ToLower(m.Name), q) {
+				if info, err := os.Stat(resolved); err == nil {
+					hits = append(hits, SearchHit{
+						MountID:   m.ID,
+						MountName: m.Name,
+						Name:      base,
+						Path:      base,
+						IsDir:     false,
+						Size:      info.Size(),
+						ModTime:   info.ModTime().UTC().Format(time.RFC3339),
+						MimeType:  detectMimeByExt(base),
+					})
+				}
+			}
+			continue
+		}
+
+		root, err := os.OpenRoot(resolved)
+		if err != nil {
+			continue
+		}
+		_ = fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil || p == "." {
+				return nil
+			}
+			if len(hits) >= limit {
+				return fs.SkipAll
+			}
+			if !strings.Contains(strings.ToLower(d.Name()), q) {
+				return nil
+			}
+			info, err := d.Info()
+			if err != nil {
+				return nil
+			}
+			mimeType := "inode/directory"
+			if !d.IsDir() {
+				mimeType = detectMimeByExt(d.Name())
+			}
+			hits = append(hits, SearchHit{
+				MountID:   m.ID,
+				MountName: m.Name,
+				Name:      d.Name(),
+				Path:      p,
+				IsDir:     d.IsDir(),
+				Size:      info.Size(),
+				ModTime:   info.ModTime().UTC().Format(time.RFC3339),
+				MimeType:  mimeType,
+			})
+			return nil
+		})
+		_ = root.Close()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"hits": hits})
 }
 
 type meteredWriter struct {

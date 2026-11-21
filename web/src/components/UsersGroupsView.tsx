@@ -43,6 +43,29 @@ export function UsersGroupsView({ currentUser, netConfig, onSettingsSaved, onAnn
 
   const [users, setUsers] = useState<User[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
+  const [aclNodes, setAclNodes] = useState<{ id: string; display_name: string; is_owner: boolean; mounts: { id: string; name: string }[] }[]>([]);
+  const [mountAcls, setMountAcls] = useState<
+    {
+      id: string;
+      node_id: string;
+      mount_id: string;
+      group_id: string;
+      group_name?: string;
+      can_read: boolean;
+      can_write: boolean;
+      can_delete: boolean;
+      can_share: boolean;
+      can_compute: boolean;
+    }[]
+  >([]);
+  const [aclNodeId, setAclNodeId] = useState("");
+  const [aclMountId, setAclMountId] = useState("");
+  const [aclGroupId, setAclGroupId] = useState("");
+  const [aclRead, setAclRead] = useState(true);
+  const [aclWrite, setAclWrite] = useState(false);
+  const [aclDelete, setAclDelete] = useState(false);
+  const [aclShare, setAclShare] = useState(true);
+  const [aclCompute, setAclCompute] = useState(false);
   const [invites, setInvites] = useState<InviteKey[]>([]);
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [auditTotal, setAuditTotal] = useState(0);
@@ -95,6 +118,10 @@ export function UsersGroupsView({ currentUser, netConfig, onSettingsSaved, onAnn
       if (isHostAdmin || isGroupAdmin) {
         tasks.push(api.listUsers().then((r) => setUsers(r.users)));
         tasks.push(api.listGroups().then((r) => setGroups(r.groups)));
+        if (isHostAdmin) {
+          tasks.push(api.listNodes().then((r) => setAclNodes(r.nodes)));
+          tasks.push(api.listMountACLs().then((r) => setMountAcls(r.acls)));
+        }
       }
       if (canInvite) {
         tasks.push(api.listInvites().then((r) => setInvites(r.invites)));
@@ -837,6 +864,159 @@ export function UsersGroupsView({ currentUser, netConfig, onSettingsSaved, onAnn
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {isHostAdmin && (
+            <div style={{ marginTop: 22, paddingTop: 18, borderTop: "1px solid var(--border)" }}>
+              <h3 className="section-title" style={{ marginBottom: 4 }}>
+                Per-Folder Group ACLs
+              </h3>
+              <p className="page-sub" style={{ marginTop: 0 }}>
+                Restrict a shared folder to specific groups. Folders with no ACL rules remain readable by all members. Only machine owners can grant Write/Delete on their own machines.
+              </p>
+
+              <form
+                style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 14 }}
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!aclNodeId || !aclMountId || !aclGroupId) return;
+                  setError(null);
+                  try {
+                    await api.upsertMountACL({
+                      node_id: aclNodeId,
+                      mount_id: aclMountId,
+                      group_id: aclGroupId,
+                      can_read: aclRead,
+                      can_write: aclWrite,
+                      can_delete: aclDelete,
+                      can_share: aclShare,
+                      can_compute: aclCompute,
+                    });
+                    const res = await api.listMountACLs();
+                    setMountAcls(res.acls);
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : "Failed to save folder ACL");
+                  }
+                }}
+              >
+                <select
+                  aria-label="Select machine"
+                  value={aclNodeId}
+                  onChange={(e) => {
+                    setAclNodeId(e.target.value);
+                    const n = aclNodes.find((x) => x.id === e.target.value);
+                    setAclMountId(n?.mounts[0]?.id ?? "");
+                  }}
+                >
+                  <option value="">Select machine…</option>
+                  {aclNodes.map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {n.display_name}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  aria-label="Select folder"
+                  value={aclMountId}
+                  onChange={(e) => setAclMountId(e.target.value)}
+                >
+                  <option value="">Select folder…</option>
+                  {(aclNodes.find((n) => n.id === aclNodeId)?.mounts ?? []).map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  aria-label="Select group"
+                  value={aclGroupId}
+                  onChange={(e) => setAclGroupId(e.target.value)}
+                >
+                  <option value="">Select group…</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </select>
+
+                <label style={{ display: "inline-flex", gap: 4, alignItems: "center", fontSize: 12 }}>
+                  <input type="checkbox" checked={aclRead} onChange={(e) => setAclRead(e.target.checked)} /> Read
+                </label>
+                <label style={{ display: "inline-flex", gap: 4, alignItems: "center", fontSize: 12 }}>
+                  <input type="checkbox" checked={aclShare} onChange={(e) => setAclShare(e.target.checked)} /> Share
+                </label>
+                <label style={{ display: "inline-flex", gap: 4, alignItems: "center", fontSize: 12 }}>
+                  <input type="checkbox" checked={aclWrite} onChange={(e) => setAclWrite(e.target.checked)} /> Write
+                </label>
+                <label style={{ display: "inline-flex", gap: 4, alignItems: "center", fontSize: 12 }}>
+                  <input type="checkbox" checked={aclDelete} onChange={(e) => setAclDelete(e.target.checked)} /> Delete
+                </label>
+                <label style={{ display: "inline-flex", gap: 4, alignItems: "center", fontSize: 12 }}>
+                  <input type="checkbox" checked={aclCompute} onChange={(e) => setAclCompute(e.target.checked)} /> Compute
+                </label>
+
+                <button type="submit" className="btn btn-primary" disabled={!aclNodeId || !aclMountId || !aclGroupId}>
+                  Save rule
+                </button>
+              </form>
+
+              {mountAcls.length === 0 ? (
+                <p className="inline-muted" style={{ margin: 0 }}>
+                  No folder ACL rules configured yet (all shared folders use default member visibility).
+                </p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {mountAcls.map((a) => {
+                    const node = aclNodes.find((n) => n.id === a.node_id);
+                    const mount = node?.mounts.find((m) => m.id === a.mount_id);
+                    return (
+                      <div
+                        key={a.id}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: 8,
+                          padding: "8px 10px",
+                          border: "1px solid var(--border)",
+                          borderRadius: 8,
+                        }}
+                      >
+                        <div>
+                          <strong>{node?.display_name ?? a.node_id}</strong> / <span className="mono">{mount?.name ?? a.mount_id}</span>{" "}
+                          <span className="tag-chip">{a.group_name ?? a.group_id}</span>
+                          <span className="inline-muted mono" style={{ marginLeft: 8, fontSize: 11 }}>
+                            {[
+                              a.can_read && "read",
+                              a.can_share && "share",
+                              a.can_write && "write",
+                              a.can_delete && "delete",
+                              a.can_compute && "compute",
+                            ]
+                              .filter(Boolean)
+                              .join(", ")}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-danger btn-sm"
+                          onClick={async () => {
+                            await api.deleteMountACL(a.id, a.node_id);
+                            const res = await api.listMountACLs();
+                            setMountAcls(res.acls);
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </section>

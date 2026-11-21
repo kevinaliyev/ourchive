@@ -89,6 +89,53 @@ func TestAgentServerVFSAndRangeAndSecurity(t *testing.T) {
 	}
 }
 
+func TestResumableCrashSafeUploadsAndETagDownloads(t *testing.T) {
+	mountDir := t.TempDir()
+	srv := NewAgentServer(func() ConfigSnapshot {
+		return ConfigSnapshot{
+			Mounts: []protocol.FolderMount{
+				{ID: "m1", Name: "Media", LocalPath: mountDir, Enabled: true},
+			},
+		}
+	}, NewTrafficMeter())
+
+	// 1. Interrupted upload part 1 (final=0): stages to .ourchive.part and stays hidden from LIST.
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/vfs/m1/file?path=movie.bin&final=0", bytes.NewReader([]byte("PART1-"))))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("part1 put expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify .ourchive.part is hidden from directory listing.
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/vfs/m1/list", nil))
+	var listRes protocol.ListResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &listRes)
+	if len(listRes.Entries) != 0 {
+		t.Fatalf("expected .ourchive.part to be hidden from list, got %+v", listRes.Entries)
+	}
+
+	// 2. Resumed upload part 2 (resume=1&final=1): appends and atomically renames to movie.bin.
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/vfs/m1/file?path=movie.bin&resume=1&final=1", bytes.NewReader([]byte("PART2-DONE"))))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("part2 resume put expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 3. Verify GET returns complete combined file with strong ETag and Accept-Ranges.
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/vfs/m1/file?path=movie.bin", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get expected 200, got %d", rec.Code)
+	}
+	if rec.Body.String() != "PART1-PART2-DONE" {
+		t.Fatalf("unexpected combined body: %q", rec.Body.String())
+	}
+	if rec.Header().Get("ETag") == "" || rec.Header().Get("Accept-Ranges") != "bytes" {
+		t.Fatalf("expected strong ETag and Accept-Ranges: bytes, got ETag=%q Accept-Ranges=%q", rec.Header().Get("ETag"), rec.Header().Get("Accept-Ranges"))
+	}
+}
+
 func TestTagComposedSharedTrees(t *testing.T) {
 	ctx := context.Background()
 	store, err := db.OpenSQLite(ctx, filepath.Join(t.TempDir(), "tags.db"))

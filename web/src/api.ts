@@ -231,6 +231,17 @@ export interface EdgeStorageConfig {
   ttl_hours: number;
 }
 
+export interface OIDCProviderConfig {
+  id: string;
+  name: string;
+  enabled: boolean;
+  issuer_url: string;
+  client_id: string;
+  client_secret?: string;
+  has_client_secret: boolean;
+  scopes: string;
+}
+
 export interface HubSettings {
   p2p_enabled: boolean;
   stun_servers: string[];
@@ -239,6 +250,7 @@ export interface HubSettings {
   max_relay_file_mb: number;
   relay_cap_mbps: number;
   edge_storage: EdgeStorageConfig;
+  oidc_providers?: OIDCProviderConfig[];
   auth_identity_mode: AuthIdentityMode;
   allow_group_admin_invites: boolean;
   audit_core_enabled: boolean;
@@ -442,6 +454,31 @@ export const api = {
       method: "DELETE",
     });
   },
+  zipUrl: (nodeId: string, mountId: string, relPath: string) => {
+    const q = new URLSearchParams({ path: relPath });
+    return `/api/vfs/nodes/${encodeURIComponent(nodeId)}/mounts/${encodeURIComponent(mountId)}/zip?${q.toString()}`;
+  },
+  renameEntry: (nodeId: string, mountId: string, from: string, to: string) =>
+    request<{ ok: boolean; from: string; to: string }>(`/api/vfs/nodes/${nodeId}/mounts/${mountId}/rename`, {
+      method: "POST",
+      body: JSON.stringify({ from, to }),
+    }),
+  searchFiles: (q: string) =>
+    request<{
+      hits: {
+        node_id: string;
+        node_name: string;
+        is_own_host: boolean;
+        mount_id: string;
+        mount_name: string;
+        name: string;
+        path: string;
+        is_dir: boolean;
+        size: number;
+        mod_time: string;
+        mime_type: string;
+      }[];
+    }>(`/api/vfs/search?q=${encodeURIComponent(q)}`),
   revealLocal: (nodeId: string, mountId: string, relPath: string) => {
     const q = new URLSearchParams({ path: relPath });
     return request<{ ok: boolean }>(`/api/vfs/nodes/${nodeId}/mounts/${mountId}/reveal?${q.toString()}`, {
@@ -513,6 +550,80 @@ export const api = {
 
   listComputeNodes: () => request<{ nodes: NodeView[] }>("/api/compute/nodes"),
   listComputeJobs: () => request<{ jobs: ComputeJob[] }>("/api/compute/jobs"),
+
+  listOIDCProviders: () =>
+    request<{ providers: { id: string; name: string }[]; passkeys_enabled: boolean }>("/api/auth/oidc/providers"),
+  listPasskeys: () =>
+    request<{
+      rpId: string;
+      userId: string;
+      credentials: {
+        id: string;
+        passkeyUserId: string;
+        name: string;
+        aaguid: string;
+        credentialDeviceType: "singleDevice" | "multiDevice";
+        credentialBackedUp: boolean;
+        transports: string[];
+        registeredAt: number;
+        lastUsedAt?: number;
+        counter: number;
+      }[];
+    }>("/api/auth/passkeys"),
+  renamePasskey: (id: string, name: string) =>
+    request<{ ok: boolean }>(`/api/auth/passkeys/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ name }),
+    }),
+  deletePasskey: (id: string) =>
+    request<{ ok: boolean }>(`/api/auth/passkeys/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  updateProfile: (body: { username: string; display_name: string }) =>
+    request<{ user: User; rpId: string; userId: string }>("/api/auth/profile", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
+  listMountACLs: (nodeId?: string, mountId?: string) => {
+    const q = new URLSearchParams();
+    if (nodeId) q.set("node_id", nodeId);
+    if (mountId) q.set("mount_id", mountId);
+    const qs = q.toString();
+    return request<{
+      acls: {
+        id: string;
+        node_id: string;
+        mount_id: string;
+        group_id: string;
+        group_name?: string;
+        can_read: boolean;
+        can_write: boolean;
+        can_delete: boolean;
+        can_share: boolean;
+        can_compute: boolean;
+        created_at: string;
+      }[];
+    }>(`/api/acls${qs ? `?${qs}` : ""}`);
+  },
+  upsertMountACL: (body: {
+    node_id: string;
+    mount_id: string;
+    group_id: string;
+    can_read: boolean;
+    can_write: boolean;
+    can_delete: boolean;
+    can_share: boolean;
+    can_compute: boolean;
+  }) =>
+    request<{ acl: unknown }>("/api/acls", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deleteMountACL: (id: string, nodeId?: string) =>
+    request<{ ok: boolean }>(`/api/acls/${encodeURIComponent(id)}${nodeId ? `?node_id=${encodeURIComponent(nodeId)}` : ""}`, {
+      method: "DELETE",
+    }),
   convertOnAgent: async (nodeId: string, file: File, format: string, preset: string) => {
     const q = new URLSearchParams({
       node_id: nodeId,

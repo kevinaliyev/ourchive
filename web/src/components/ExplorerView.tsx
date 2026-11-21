@@ -26,6 +26,7 @@ import {
   Link2,
   List,
   Maximize2,
+  Pencil,
   Plus,
   RefreshCw,
   Search,
@@ -47,7 +48,8 @@ import {
   TreeItem,
   User,
 } from "../api";
-import { downloadFileSmart } from "../p2p";
+import { downloadFileSmart, downloadZipSmart, uploadFileSmart } from "../p2p";
+import { clearResumableDownload, listResumableDownloads, ResumableDownloadMeta } from "../transferCache";
 import { CreateShareModal, ShareTarget } from "./CreateShareModal";
 import { FilePreviewModal, PreviewTarget } from "./FilePreviewModal";
 import { ModalDialog } from "./ModalDialog";
@@ -172,6 +174,67 @@ export function ExplorerView({
   // New folder modal
   const [mkdirOpen, setMkdirOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
+
+  // Multi-select & Global Search across all online nodes
+  const [resumableList, setResumableList] = useState<ResumableDownloadMeta[]>(() => listResumableDownloads());
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+
+  useEffect(() => {
+    const sync = () => setResumableList(listResumableDownloads());
+    window.addEventListener("ourchive-transfers-changed", sync);
+    return () => window.removeEventListener("ourchive-transfers-changed", sync);
+  }, []);
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [globalQuery, setGlobalQuery] = useState("");
+  const [globalSearching, setGlobalSearching] = useState(false);
+  const [globalHits, setGlobalHits] = useState<
+    {
+      node_id: string;
+      node_name: string;
+      is_own_host: boolean;
+      mount_id: string;
+      mount_name: string;
+      name: string;
+      path: string;
+      is_dir: boolean;
+      size: number;
+      mod_time: string;
+      mime_type: string;
+    }[]
+  >([]);
+
+  function toggleSelectPath(p: string) {
+    setSelectedPaths((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
+  }
+
+  async function handleGlobalSearch(e: FormEvent) {
+    e.preventDefault();
+    if (!globalQuery.trim()) return;
+    setGlobalSearching(true);
+    try {
+      const res = await api.searchFiles(globalQuery.trim());
+      setGlobalHits(res.hits);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Global search failed");
+    } finally {
+      setGlobalSearching(false);
+    }
+  }
+
+  async function handleBulkDelete() {
+    if (!selectedNode || !selectedMount || selectedPaths.length === 0) return;
+    if (!window.confirm(`Delete ${selectedPaths.length} selected item(s) from ${selectedNode.display_name}?`)) return;
+    for (const p of selectedPaths) {
+      try {
+        await api.deleteEntry(selectedNode.id, selectedMount.id, p);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : `Failed to delete ${p}`);
+        break;
+      }
+    }
+    setSelectedPaths([]);
+    await loadDirectory();
+  }
 
   // On-demand slide-over Inspector drawer, Rich File Previewer & Share Modal
   const [inspected, setInspected] = useState<FileEntry | null>(null);
@@ -403,19 +466,69 @@ export function ExplorerView({
     const files = Array.from(fileList);
     if (files.length === 0) return;
     setError(null);
+    let lastTransport: "p2p" | "relay" = "p2p";
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
       const targetPath = relPath ? `${relPath}/${f.name}` : f.name;
-      setUploadStatus(`Uploading ${f.name} (${i + 1}/${files.length})…`);
+      setUploadStatus(`Connecting P2P to upload ${f.name} (${i + 1}/${files.length})…`);
       try {
-        await api.uploadFile(selectedNode.id, selectedMount.id, targetPath, f);
+        const res = await uploadFileSmart(selectedNode.id, selectedMount.id, targetPath, f, netConfig, (p) => {
+          if (p.transport === "p2p" && p.total > 0) {
+            const pct = Math.min(100, Math.round((p.received / p.total) * 100));
+            setUploadStatus(`Direct P2P upload · ${f.name} (${pct}%)`);
+          } else if (p.transport === "relay") {
+            setUploadStatus(`Uploading ${f.name} via Hub relay fallback…`);
+          }
+        });
+        lastTransport = res.transport;
       } catch (err) {
         setError(err instanceof Error ? err.message : `Failed to upload ${f.name}`);
         break;
       }
     }
-    setUploadStatus(null);
+    setUploadStatus(
+      lastTransport === "p2p" ? `Uploaded ${files.length} file${files.length === 1 ? "" : "s"} directly via P2P (0 Hub egress).` : null,
+    );
+    if (lastTransport === "p2p") window.setTimeout(() => setUploadStatus(null), 2500);
     await loadDirectory();
+  }
+
+  async function handleSmartZip(nodeId: string, mountId: string, targetRelPath: string, label: string, paths?: string[]) {
+    setError(null);
+    setUploadStatus(`Connecting P2P to stream ${label}.zip…`);
+    try {
+      const modeUsed = await downloadZipSmart(
+        nodeId,
+        mountId,
+        targetRelPath,
+        netConfig,
+        (p) => {
+          if (p.transport === "p2p") {
+            setUploadStatus(`Direct P2P .zip · ${label} (${formatBytes(p.received)})`);
+          } else {
+            setUploadStatus(`Downloading ${label}.zip via Hub relay fallback…`);
+          }
+        },
+        paths,
+      );
+      setUploadStatus(modeUsed === "p2p" ? `Downloaded ${label}.zip directly via P2P (0 Hub egress).` : null);
+      if (modeUsed === "p2p") window.setTimeout(() => setUploadStatus(null), 2500);
+    } catch (err) {
+      setUploadStatus(null);
+      setError(err instanceof Error ? err.message : "ZIP download failed");
+    }
+  }
+
+  async function handleRenameEntry(entry: FileEntry) {
+    if (!selectedNode || !selectedMount) return;
+    const nextName = window.prompt("Rename or move (relative path inside folder):", entry.path);
+    if (!nextName || !nextName.trim() || nextName.trim() === entry.path) return;
+    try {
+      await api.renameEntry(selectedNode.id, selectedMount.id, entry.path, nextName.trim());
+      await loadDirectory();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Rename failed");
+    }
   }
 
   function handleDrop(e: DragEvent) {
@@ -938,6 +1051,35 @@ export function ExplorerView({
                 </button>
               </div>
 
+              <button
+                type="button"
+                className="btn"
+                title="Search across all online machines"
+                onClick={() => setGlobalSearchOpen(true)}
+              >
+                <Search size={14} strokeWidth={1.6} />
+                <span>Global search</span>
+              </button>
+
+              {selectedNode.status === "online" && selectedMount.kind !== "file" && (
+                <button
+                  type="button"
+                  className="btn"
+                  title="Stream current folder as .zip over direct P2P (0 Hub egress)"
+                  onClick={() =>
+                    void handleSmartZip(
+                      selectedNode.id,
+                      selectedMount.id,
+                      relPath,
+                      relPath ? relPath.split("/").pop() || selectedMount.name : selectedMount.name,
+                    )
+                  }
+                >
+                  <Download size={14} strokeWidth={1.6} />
+                  <span>Folder .zip</span>
+                </button>
+              )}
+
               {selectedNode.is_owner && selectedNode.status === "online" && selectedMount.kind !== "file" && (
                 <>
                   <button type="button" className="btn" onClick={() => setMkdirOpen(true)}>
@@ -1057,6 +1199,73 @@ export function ExplorerView({
             </div>
           </div>
 
+          {selectedPaths.length > 0 && selectedNode && selectedMount && (
+            <div className="status-banner" style={{ justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+              <span>
+                <strong>{selectedPaths.length}</strong> selected
+              </span>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() =>
+                    void handleSmartZip(selectedNode.id, selectedMount.id, "", "selection", selectedPaths)
+                  }
+                >
+                  <Download size={13} strokeWidth={1.6} />
+                  <span>Download .zip (P2P)</span>
+                </button>
+                {selectedNode.is_owner && (
+                  <button type="button" className="btn btn-sm btn-danger" onClick={() => void handleBulkDelete()}>
+                    <Trash2 size={13} strokeWidth={1.6} />
+                    <span>Delete selected</span>
+                  </button>
+                )}
+                <button type="button" className="btn btn-sm" onClick={() => setSelectedPaths([])}>
+                  Clear
+                </button>
+              </div>
+            </div>
+          )}
+
+          {resumableList.length > 0 && (
+            <div className="status-banner" style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
+              <div style={{ fontWeight: 600, fontSize: 12 }}>
+                Interrupted downloads saved on disk ({resumableList.length})
+              </div>
+              {resumableList.map((dl) => {
+                const pct = dl.totalSize > 0 ? Math.min(99, Math.round((dl.receivedBytes / dl.totalSize) * 100)) : 0;
+                return (
+                  <div
+                    key={dl.key}
+                    style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}
+                  >
+                    <span className="mono" style={{ fontSize: 12 }}>
+                      {dl.name} · {formatBytes(dl.receivedBytes)}
+                      {dl.totalSize > 0 ? ` / ${formatBytes(dl.totalSize)} (${pct}%)` : ""}
+                    </span>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        onClick={() => void handleSmartDownload(dl.nodeId, dl.mountId, dl.relPath, dl.name)}
+                      >
+                        Resume
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => void clearResumableDownload(dl.key)}
+                      >
+                        Discard
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {uploadStatus && <div className="status-banner">{uploadStatus}</div>}
           {error && (
             <div className="alert-error" role="alert">
@@ -1112,6 +1321,14 @@ export function ExplorerView({
                         >
                           <th>
                             <div className="file-cell" style={{ paddingInlineStart: depth * 20 }}>
+                              <input
+                                type="checkbox"
+                                aria-label={`Select ${entry.name}`}
+                                checked={selectedPaths.includes(entry.path)}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={() => toggleSelectPath(entry.path)}
+                                style={{ marginRight: 6 }}
+                              />
                               {entry.is_dir ? (
                                 <button
                                   type="button"
@@ -1174,6 +1391,28 @@ export function ExplorerView({
                                     <Download size={14} strokeWidth={1.6} />
                                   </button>
                                 ))}
+                              {entry.is_dir && selectedNode.status === "online" && (
+                                <button
+                                  type="button"
+                                  className="icon-btn"
+                                  title="Download folder as .zip (P2P direct)"
+                                  aria-label={`Download ${entry.name} as zip`}
+                                  onClick={() => handleSmartZip(selectedNode.id, selectedMount.id, entry.path, entry.name)}
+                                >
+                                  <Download size={14} strokeWidth={1.6} />
+                                </button>
+                              )}
+                              {selectedNode.is_owner && selectedNode.status === "online" && (
+                                <button
+                                  type="button"
+                                  className="icon-btn"
+                                  title="Rename or move"
+                                  aria-label={`Rename ${entry.name}`}
+                                  onClick={() => void handleRenameEntry(entry)}
+                                >
+                                  <Pencil size={14} strokeWidth={1.6} />
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 className="btn btn-sm"
@@ -1845,6 +2084,58 @@ export function ExplorerView({
               Enable parity sync
             </button>
           </div>
+        </form>
+      </ModalDialog>
+
+      <ModalDialog open={globalSearchOpen} title="Global archive search" onClose={() => setGlobalSearchOpen(false)}>
+        <form className="form-stack" onSubmit={handleGlobalSearch}>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              type="search"
+              placeholder="Search filenames across all online machines…"
+              value={globalQuery}
+              onChange={(e) => setGlobalQuery(e.target.value)}
+              style={{ flex: 1 }}
+              autoFocus
+            />
+            <button type="submit" className="btn btn-primary" disabled={globalSearching}>
+              {globalSearching ? "Searching…" : "Search"}
+            </button>
+          </div>
+          {globalHits.length === 0 ? (
+            <p className="inline-muted" style={{ margin: 0 }}>
+              {globalQuery.trim() && !globalSearching ? "No matching files found on online machines." : "Type a filename fragment to search all accessible folders."}
+            </p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 360, overflowY: "auto" }}>
+              {globalHits.map((hit, idx) => (
+                <button
+                  key={`${hit.node_id}-${hit.mount_id}-${hit.path}-${idx}`}
+                  type="button"
+                  className="btn"
+                  style={{ justifyContent: "space-between", height: "auto", padding: "8px 10px", textAlign: "left" }}
+                  onClick={() => {
+                    setMode("nodes");
+                    setSelectedNodeId(hit.node_id);
+                    setSelectedMountId(hit.mount_id);
+                    const parts = hit.path.split("/");
+                    setRelPath(hit.is_dir ? hit.path : parts.slice(0, -1).join("/"));
+                    setGlobalSearchOpen(false);
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis" }}>{hit.name}</div>
+                    <div className="inline-muted mono" style={{ fontSize: 11 }}>
+                      {hit.node_name} / {hit.mount_name} / {hit.path}
+                    </div>
+                  </div>
+                  <span className="inline-muted mono" style={{ fontSize: 12 }}>
+                    {hit.is_dir ? "Folder" : formatBytes(hit.size)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </form>
       </ModalDialog>
     </div>

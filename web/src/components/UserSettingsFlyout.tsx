@@ -3,9 +3,16 @@
  * theme switcher, animated gradient button toggle, transfer mode readout, password rotation,
  * sign-out-all-devices, and sign-out.
  */
-import { FormEvent, useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, KeyRound, LogOut, Radio, Settings } from "lucide-react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { Check, ChevronDown, Fingerprint, KeyRound, LogOut, Pencil, Plus, Radio, Settings, Trash2 } from "lucide-react";
 import { api, PublicNetworkConfig, User } from "../api";
+import {
+  getPasskeyCapabilities,
+  registerNewPasskey,
+  StoredPasskeyCredential,
+  syncAcceptedCredentials,
+  syncCurrentUserDetails,
+} from "../passkeys";
 import { ModalDialog } from "./ModalDialog";
 
 interface UserSettingsFlyoutProps {
@@ -34,7 +41,98 @@ export function UserSettingsFlyout({
   const [pwBusy, setPwBusy] = useState(false);
   const [pwError, setPwError] = useState<string | null>(null);
   const [pwDone, setPwDone] = useState(false);
+
+  const [pkOpen, setPkOpen] = useState(false);
+  const [passkeys, setPasskeys] = useState<StoredPasskeyCredential[]>([]);
+  const [pkCanCreate, setPkCanCreate] = useState(false);
+  const [pkBusy, setPkBusy] = useState(false);
+  const [pkError, setPkError] = useState<string | null>(null);
+  const [pkNewName, setPkNewName] = useState("");
+  const [profileDisplay, setProfileDisplay] = useState(user.display_name);
+  const [profileUsername, setProfileUsername] = useState(user.username ?? "");
+  const [profileSaved, setProfileSaved] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
+
+  const loadPasskeys = useCallback(async () => {
+    try {
+      const [res, caps] = await Promise.all([api.listPasskeys(), getPasskeyCapabilities()]);
+      setPasskeys(res.credentials);
+      setPkCanCreate(Boolean(caps.supported && (caps.platformAuthenticator || caps.conditionalGet)));
+      if (res.rpId && res.userId) {
+        void syncAcceptedCredentials(res.rpId, res.userId, res.credentials);
+      }
+    } catch (err) {
+      setPkError(err instanceof Error ? err.message : "Failed to load passkeys");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (pkOpen) {
+      setProfileDisplay(user.display_name);
+      setProfileUsername(user.username ?? "");
+      setProfileSaved(false);
+      void loadPasskeys();
+    }
+  }, [pkOpen, user.display_name, user.username, loadPasskeys]);
+
+  async function handleCreatePasskey() {
+    setPkError(null);
+    setPkBusy(true);
+    try {
+      const created = await registerNewPasskey(pkNewName.trim(), false);
+      if (created) {
+        setPkNewName("");
+        await loadPasskeys();
+      }
+    } catch (err) {
+      setPkError(err instanceof Error ? err.message : "Failed to register passkey");
+    } finally {
+      setPkBusy(false);
+    }
+  }
+
+  async function handleRenamePasskey(cred: StoredPasskeyCredential) {
+    const next = window.prompt("Rename passkey:", cred.name);
+    if (!next || !next.trim() || next.trim() === cred.name) return;
+    try {
+      await api.renamePasskey(cred.id, next.trim());
+      await loadPasskeys();
+    } catch (err) {
+      setPkError(err instanceof Error ? err.message : "Rename failed");
+    }
+  }
+
+  async function handleDeletePasskey(cred: StoredPasskeyCredential) {
+    if (!window.confirm(`Remove passkey "${cred.name}"?`)) return;
+    try {
+      await api.deletePasskey(cred.id);
+      await loadPasskeys();
+    } catch (err) {
+      setPkError(err instanceof Error ? err.message : "Delete failed");
+    }
+  }
+
+  async function handleSaveProfile(e: FormEvent) {
+    e.preventDefault();
+    setPkError(null);
+    setProfileSaved(false);
+    setPkBusy(true);
+    try {
+      const res = await api.updateProfile({
+        username: profileUsername.trim(),
+        display_name: profileDisplay.trim(),
+      });
+      if (res.rpId && res.userId) {
+        const acctName = res.user.username || res.user.email || res.user.display_name;
+        void syncCurrentUserDetails(res.rpId, res.userId, acctName, res.user.display_name);
+      }
+      setProfileSaved(true);
+    } catch (err) {
+      setPkError(err instanceof Error ? err.message : "Profile update failed");
+    } finally {
+      setPkBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -165,6 +263,19 @@ export function UserSettingsFlyout({
               style={{ width: "100%" }}
               onClick={() => {
                 setOpen(false);
+                setPkError(null);
+                setPkOpen(true);
+              }}
+            >
+              <Fingerprint size={14} strokeWidth={1.6} />
+              <span>Passkeys &amp; Profile</span>
+            </button>
+            <button
+              type="button"
+              className="btn"
+              style={{ width: "100%" }}
+              onClick={() => {
+                setOpen(false);
                 setPwError(null);
                 setPwDone(false);
                 setPwOpen(true);
@@ -192,6 +303,124 @@ export function UserSettingsFlyout({
           </div>
         </div>
       )}
+
+      <ModalDialog open={pkOpen} title="Passkeys & Profile" onClose={() => setPkOpen(false)}>
+        <div className="form-stack">
+          <form className="form-stack" onSubmit={handleSaveProfile}>
+            <div className="field">
+              <label htmlFor="prof-display">Display name</label>
+              <input
+                id="prof-display"
+                type="text"
+                required
+                value={profileDisplay}
+                onChange={(e) => setProfileDisplay(e.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="prof-user">Username</label>
+              <input
+                id="prof-user"
+                type="text"
+                value={profileUsername}
+                onChange={(e) => setProfileUsername(e.target.value)}
+                placeholder="e.g. ru"
+              />
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button type="submit" className="btn" disabled={pkBusy}>
+                Save profile
+              </button>
+              {profileSaved && <span className="inline-muted">Saved &amp; synced</span>}
+            </div>
+          </form>
+
+          <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "6px 0" }} />
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+            <strong>Registered Passkeys</strong>
+            {pkCanCreate && (
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  type="text"
+                  value={pkNewName}
+                  onChange={(e) => setPkNewName(e.target.value)}
+                  placeholder="Label (optional)"
+                  style={{ width: 130, height: 32 }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={pkBusy}
+                  onClick={() => void handleCreatePasskey()}
+                >
+                  <Plus size={14} strokeWidth={1.6} />
+                  <span>Create passkey</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {passkeys.length === 0 ? (
+            <p className="inline-muted" style={{ margin: 0 }}>
+              No passkeys registered yet.
+            </p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {passkeys.map((cred) => (
+                <div
+                  key={cred.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    padding: "8px 10px",
+                    border: "1px solid var(--border)",
+                    borderRadius: 8,
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 500, display: "flex", alignItems: "center", gap: 6 }}>
+                      <Fingerprint size={14} strokeWidth={1.6} />
+                      <span>{cred.name}</span>
+                      {cred.credentialBackedUp && <span className="tag-chip">Synced</span>}
+                    </div>
+                    <div className="inline-muted" style={{ fontSize: 12 }}>
+                      Added {new Date(cred.registeredAt).toLocaleDateString()}
+                      {cred.lastUsedAt ? ` · Last used ${new Date(cred.lastUsedAt).toLocaleDateString()}` : ""}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      title="Rename passkey"
+                      onClick={() => void handleRenamePasskey(cred)}
+                    >
+                      <Pencil size={13} strokeWidth={1.6} />
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      title="Delete passkey"
+                      onClick={() => void handleDeletePasskey(cred)}
+                    >
+                      <Trash2 size={13} strokeWidth={1.6} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {pkError && (
+            <div className="alert-error" role="alert">
+              {pkError}
+            </div>
+          )}
+        </div>
+      </ModalDialog>
 
       <ModalDialog open={pwOpen} title="Change password" onClose={() => setPwOpen(false)}>
         <form className="form-stack" onSubmit={handleChangePassword}>

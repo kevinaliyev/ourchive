@@ -3,9 +3,14 @@
  * Dynamically adapts required identifier fields to the Hub's `auth_identity_mode` policy
  * and automatically prefills invite keys from `?invite=` deep links.
  */
-import { FormEvent, useEffect, useState } from "react";
-import { Eye, EyeOff, KeyRound } from "lucide-react";
+import { FormEvent, useEffect, useRef, useState } from "react";
+import { Eye, EyeOff, Fingerprint, Globe, KeyRound } from "lucide-react";
 import { api, AuthIdentityMode, User } from "../api";
+import {
+  getPasskeyCapabilities,
+  startConditionalPasskeyLogin,
+  triggerButtonPasskeyLogin,
+} from "../passkeys";
 
 interface AuthViewProps {
   initialized: boolean;
@@ -36,14 +41,72 @@ export function AuthView({ initialized, identityMode, onAuthenticated }: AuthVie
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(() => {
+    try {
+      return new URLSearchParams(window.location.search).get("auth_error");
+    } catch {
+      return null;
+    }
+  });
   const [busy, setBusy] = useState(false);
+  const [passkeyBusy, setPasskeyBusy] = useState(false);
+  const [passkeysAvailable, setPasskeysAvailable] = useState(false);
+  const [oidcProviders, setOidcProviders] = useState<{ id: string; name: string }[]>([]);
+  const abortConditionalRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!initialized) {
       setMode("login");
+      return;
     }
+    let active = true;
+    Promise.all([api.listOIDCProviders().catch(() => ({ providers: [], passkeys_enabled: false })), getPasskeyCapabilities()]).then(
+      ([srv, caps]) => {
+        if (!active) return;
+        setOidcProviders(srv.providers || []);
+        setPasskeysAvailable(Boolean(srv.passkeys_enabled && caps.supported));
+      },
+    );
+    return () => {
+      active = false;
+    };
   }, [initialized]);
+
+  useEffect(() => {
+    if (!initialized || mode !== "login" || !passkeysAvailable) return;
+    abortConditionalRef.current?.();
+    abortConditionalRef.current = startConditionalPasskeyLogin(
+      (u) => onAuthenticated(u),
+      (msg) => setError(msg),
+    );
+    return () => {
+      abortConditionalRef.current?.();
+      abortConditionalRef.current = null;
+    };
+  }, [initialized, mode, passkeysAvailable, onAuthenticated]);
+
+  async function handlePasskeySignIn() {
+    setError(null);
+    abortConditionalRef.current?.();
+    abortConditionalRef.current = null;
+    setPasskeyBusy(true);
+    try {
+      const u = await triggerButtonPasskeyLogin();
+      if (u) {
+        onAuthenticated(u);
+        return;
+      }
+      // Re-arm conditional autofill if user cancelled the explicit prompt
+      abortConditionalRef.current = startConditionalPasskeyLogin(
+        (user) => onAuthenticated(user),
+        (msg) => setError(msg),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Passkey sign-in failed");
+    } finally {
+      setPasskeyBusy(false);
+    }
+  }
 
   const showEmailField = !initialized || identityMode !== "username_only";
   const showUsernameField = !initialized || identityMode !== "email_only";
@@ -102,7 +165,7 @@ export function AuthView({ initialized, identityMode, onAuthenticated }: AuthVie
           <span>Ourchive</span>
         </div>
 
-        <h1 className="page-title" style={{ marginTop: 16 }}>
+        <h1 id="signin-heading" className="page-title" style={{ marginTop: 16 }}>
           {!initialized
             ? "Initialize Ourchive Hub"
             : mode === "invite"
@@ -168,7 +231,9 @@ export function AuthView({ initialized, identityMode, onAuthenticated }: AuthVie
                 id="auth-ident"
                 name="username"
                 type="text"
-                autoComplete="username"
+                autoComplete="username webauthn"
+                autoFocus
+                aria-describedby="signin-heading"
                 spellCheck={false}
                 enterKeyHint="next"
                 required
@@ -275,6 +340,40 @@ export function AuthView({ initialized, identityMode, onAuthenticated }: AuthVie
                   ? "Create account"
                   : "Sign in"}
           </button>
+
+          {initialized && mode === "login" && passkeysAvailable && (
+            <button
+              type="button"
+              className="btn"
+              style={{ height: 36, justifyContent: "center" }}
+              disabled={passkeyBusy || busy}
+              onClick={() => void handlePasskeySignIn()}
+            >
+              <Fingerprint size={14} strokeWidth={1.6} />
+              <span>{passkeyBusy ? "Waiting for passkey…" : "Sign in with passkey"}</span>
+            </button>
+          )}
+
+          {initialized && oidcProviders.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {oidcProviders.map((prov) => {
+                const href = `/api/auth/oidc/${encodeURIComponent(prov.id)}/login${
+                  mode === "invite" && inviteCode.trim() ? `?invite=${encodeURIComponent(inviteCode.trim())}` : ""
+                }`;
+                return (
+                  <a
+                    key={prov.id}
+                    href={href}
+                    className="btn"
+                    style={{ height: 36, justifyContent: "center", textDecoration: "none" }}
+                  >
+                    <Globe size={14} strokeWidth={1.6} />
+                    <span>Continue with {prov.name}</span>
+                  </a>
+                );
+              })}
+            </div>
+          )}
 
           {initialized && (
             <button

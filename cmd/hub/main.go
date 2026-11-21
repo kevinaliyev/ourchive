@@ -25,6 +25,7 @@ import (
 	"github.com/ourchive/ourchive/internal/audit"
 	"github.com/ourchive/ourchive/internal/auth"
 	"github.com/ourchive/ourchive/internal/db"
+	"github.com/ourchive/ourchive/internal/events"
 	"github.com/ourchive/ourchive/internal/settings"
 	"github.com/ourchive/ourchive/internal/shares"
 	"github.com/ourchive/ourchive/internal/storage"
@@ -63,12 +64,339 @@ func main() {
 	tagStore := vfs.NewTagStore(store)
 	settingsStore := settings.NewStore(ctx, store)
 	auditSvc := audit.NewService(store, settingsStore)
+	eventBus := events.NewBus()
+	oidcMgr := auth.NewOIDCManager(authSvc, settingsStore)
+	passkeyMgr, err := auth.NewPasskeyManager(authSvc, publicHubURL)
+	if err != nil {
+		log.Printf("webauthn disabled: %v", err)
+	}
 	authLimiter := newIPRateLimiter(12, 12) // 12 req/min with burst 12 per IP on auth/invite/enroll endpoints
+
+	// Push live node status / traffic heartbeats to SSE subscribers every 2.5s.
+	go func() {
+		t := time.NewTicker(2500 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if eventBus.Count() > 0 {
+					eventBus.Publish("nodes.updated", map[string]any{"ts": time.Now().UTC().UnixMilli()})
+				}
+			}
+		}
+	}()
 
 	shareBaseURL := envOr("OURCHIVE_SHARE_URL", "http://"+shareHost+addr)
 	shareSvc := shares.NewService(store, broker, settingsStore, shareBaseURL, thumbDir)
 
 	appMux := http.NewServeMux()
+
+	// --- Real-Time SSE Stream ---
+	appMux.HandleFunc("GET /api/events", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		eventBus.ServeSSE(w, r)
+	}))
+
+	// --- Passkeys (WebAuthn) & OIDC ---
+	appMux.HandleFunc("GET /api/auth/oidc/providers", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"providers":        settingsStore.PublicOIDCProviders(),
+			"passkeys_enabled": passkeyMgr != nil,
+		})
+	})
+
+	appMux.HandleFunc("GET /api/auth/oidc/{provider}/login", func(w http.ResponseWriter, r *http.Request) {
+		providerID := r.PathValue("provider")
+		scheme := "http"
+		if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+			scheme = "https"
+		}
+		cbURL := scheme + "://" + r.Host + "/api/auth/oidc/" + url.PathEscape(providerID) + "/callback"
+		invite := strings.TrimSpace(r.URL.Query().Get("invite"))
+		authURL, err := oidcMgr.BeginLogin(r.Context(), providerID, cbURL, invite)
+		if err != nil {
+			http.Redirect(w, r, "/?auth_error="+url.QueryEscape(err.Error()), http.StatusFound)
+			return
+		}
+		http.Redirect(w, r, authURL, http.StatusFound)
+	})
+
+	appMux.HandleFunc("GET /api/auth/oidc/{provider}/callback", func(w http.ResponseWriter, r *http.Request) {
+		providerID := r.PathValue("provider")
+		if errMsg := r.URL.Query().Get("error"); errMsg != "" {
+			http.Redirect(w, r, "/?auth_error="+url.QueryEscape(errMsg), http.StatusFound)
+			return
+		}
+		scheme := "http"
+		if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+			scheme = "https"
+		}
+		cbURL := scheme + "://" + r.Host + "/api/auth/oidc/" + url.PathEscape(providerID) + "/callback"
+		u, err := oidcMgr.CompleteCallback(r.Context(), providerID, r.URL.Query().Get("code"), r.URL.Query().Get("state"), cbURL)
+		if err != nil {
+			http.Redirect(w, r, "/?auth_error="+url.QueryEscape(err.Error()), http.StatusFound)
+			return
+		}
+		sid, exp, err := authSvc.CreateSession(r.Context(), u.ID, auth.DefaultSessionTTL)
+		if err != nil {
+			http.Redirect(w, r, "/?auth_error="+url.QueryEscape("failed to create session"), http.StatusFound)
+			return
+		}
+		auth.SetSessionCookie(w, r, sid, exp)
+		auditSvc.Log(r.Context(), audit.Entry{
+			Category:   audit.CategoryCore,
+			Action:     "auth.oidc_login",
+			ActorID:    u.ID,
+			ActorLabel: u.Label(),
+			Metadata:   map[string]any{"provider": providerID},
+			IPAddress:  audit.ClientIP(r),
+		})
+		http.Redirect(w, r, "/", http.StatusFound)
+	})
+
+	appMux.HandleFunc("POST /api/auth/passkeys/login/begin", func(w http.ResponseWriter, r *http.Request) {
+		if passkeyMgr == nil {
+			writeError(w, http.StatusServiceUnavailable, "passkeys are not configured")
+			return
+		}
+		assertion, token, err := passkeyMgr.BeginDiscoverableLogin()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"options":        assertion.Response,
+			"ceremony_token": token,
+		})
+	})
+
+	appMux.HandleFunc("POST /api/auth/passkeys/login/finish", func(w http.ResponseWriter, r *http.Request) {
+		if passkeyMgr == nil {
+			writeError(w, http.StatusServiceUnavailable, "passkeys are not configured")
+			return
+		}
+		if !authLimiter.Allow(audit.ClientIP(r)) {
+			w.Header().Set("Retry-After", "60")
+			writeError(w, http.StatusTooManyRequests, "too many attempts; please wait a minute")
+			return
+		}
+		token := r.URL.Query().Get("token")
+		u, err := passkeyMgr.FinishDiscoverableLogin(r.Context(), token, r)
+		if errors.Is(err, auth.ErrPasskeyNotFound) {
+			writeError(w, http.StatusNotFound, "passkey not found on this hub")
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, err.Error())
+			return
+		}
+		sid, exp, err := authSvc.CreateSession(r.Context(), u.ID, auth.DefaultSessionTTL)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to create session")
+			return
+		}
+		auth.SetSessionCookie(w, r, sid, exp)
+		auditSvc.Log(r.Context(), audit.Entry{
+			Category:   audit.CategoryCore,
+			Action:     "auth.passkey_login",
+			ActorID:    u.ID,
+			ActorLabel: u.Label(),
+			IPAddress:  audit.ClientIP(r),
+		})
+		writeJSON(w, http.StatusOK, map[string]any{"user": u})
+	})
+
+	appMux.HandleFunc("GET /api/auth/passkeys", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if passkeyMgr == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"rpId": "", "userId": "", "credentials": []any{}})
+			return
+		}
+		u := auth.UserFromContext(r.Context())
+		creds, err := passkeyMgr.ListCredentials(r.Context(), u.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"rpId":        passkeyMgr.RPID(),
+			"userId":      auth.PasskeyUserID(u.ID),
+			"credentials": creds,
+		})
+	}))
+
+	appMux.HandleFunc("POST /api/auth/passkeys/register/begin", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if passkeyMgr == nil {
+			writeError(w, http.StatusServiceUnavailable, "passkeys are not configured")
+			return
+		}
+		u := auth.UserFromContext(r.Context())
+		var req struct {
+			Promotion bool `json:"promotion"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		creation, token, err := passkeyMgr.BeginRegistration(r.Context(), u, req.Promotion)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"options":        creation.Response,
+			"ceremony_token": token,
+		})
+	}))
+
+	appMux.HandleFunc("POST /api/auth/passkeys/register/finish", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if passkeyMgr == nil {
+			writeError(w, http.StatusServiceUnavailable, "passkeys are not configured")
+			return
+		}
+		u := auth.UserFromContext(r.Context())
+		token := r.URL.Query().Get("token")
+		name := r.URL.Query().Get("name")
+		cred, err := passkeyMgr.FinishRegistration(r.Context(), u, token, name, r)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		auditSvc.Log(r.Context(), audit.Entry{
+			Category:   audit.CategoryCore,
+			Action:     "auth.passkey_registered",
+			ActorID:    u.ID,
+			ActorLabel: u.Label(),
+			TargetType: "passkey",
+			TargetID:   cred.ID,
+			IPAddress:  audit.ClientIP(r),
+		})
+		writeJSON(w, http.StatusCreated, map[string]any{"credential": cred})
+	}))
+
+	appMux.HandleFunc("PUT /api/auth/passkeys/{id}", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if passkeyMgr == nil {
+			writeError(w, http.StatusServiceUnavailable, "passkeys are not configured")
+			return
+		}
+		u := auth.UserFromContext(r.Context())
+		var req struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		if err := passkeyMgr.RenameCredential(r.Context(), u.ID, r.PathValue("id"), req.Name); err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}))
+
+	appMux.HandleFunc("DELETE /api/auth/passkeys/{id}", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if passkeyMgr == nil {
+			writeError(w, http.StatusServiceUnavailable, "passkeys are not configured")
+			return
+		}
+		u := auth.UserFromContext(r.Context())
+		if err := passkeyMgr.DeleteCredential(r.Context(), u.ID, r.PathValue("id")); err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}))
+
+	appMux.HandleFunc("PUT /api/auth/profile", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		u := auth.UserFromContext(r.Context())
+		var req struct {
+			Username    string `json:"username"`
+			DisplayName string `json:"display_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		updated, err := authSvc.UpdateProfile(r.Context(), u.ID, req.Username, req.DisplayName)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		rpID := ""
+		if passkeyMgr != nil {
+			rpID = passkeyMgr.RPID()
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"user":   updated,
+			"rpId":   rpID,
+			"userId": auth.PasskeyUserID(updated.ID),
+		})
+	}))
+
+	// --- Per-Mount Group ACLs ---
+	appMux.HandleFunc("GET /api/acls", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		u := auth.UserFromContext(r.Context())
+		nodeID := r.URL.Query().Get("node_id")
+		mountID := r.URL.Query().Get("mount_id")
+		if nodeID != "" && u.Role != auth.RoleHostAdmin {
+			ok, err := broker.IsNodeOwner(r.Context(), nodeID, u)
+			if err != nil || !ok {
+				writeError(w, http.StatusForbidden, "forbidden")
+				return
+			}
+		} else if nodeID == "" && u.Role != auth.RoleHostAdmin {
+			writeError(w, http.StatusForbidden, "node_id is required")
+			return
+		}
+		list, err := authSvc.ListMountACLs(r.Context(), nodeID, mountID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"acls": list})
+	}))
+
+	appMux.HandleFunc("PUT /api/acls", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		u := auth.UserFromContext(r.Context())
+		var req auth.MountACL
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		isOwner, err := broker.IsNodeOwner(r.Context(), req.NodeID, u)
+		if err != nil || (!isOwner && u.Role != auth.RoleHostAdmin) {
+			writeError(w, http.StatusForbidden, "only the machine owner or host admin can manage folder ACLs")
+			return
+		}
+		// Security invariant: even host_admin cannot grant write/delete on another user's node.
+		if !isOwner && (req.CanWrite || req.CanDelete) {
+			writeError(w, http.StatusForbidden, "only the machine owner can grant write or delete access to their machine")
+			return
+		}
+		saved, err := authSvc.UpsertMountACL(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		eventBus.Publish("acls.updated", map[string]any{"node_id": req.NodeID, "mount_id": req.MountID})
+		writeJSON(w, http.StatusOK, map[string]any{"acl": saved})
+	}))
+
+	appMux.HandleFunc("DELETE /api/acls/{id}", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		u := auth.UserFromContext(r.Context())
+		if u.Role != auth.RoleHostAdmin {
+			// Verify ownership via node_id query parameter or lookup.
+			nodeID := r.URL.Query().Get("node_id")
+			ok, err := broker.IsNodeOwner(r.Context(), nodeID, u)
+			if err != nil || !ok {
+				writeError(w, http.StatusForbidden, "forbidden")
+				return
+			}
+		}
+		if err := authSvc.DeleteMountACL(r.Context(), r.PathValue("id")); err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		eventBus.Publish("acls.updated", map[string]any{"id": r.PathValue("id")})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}))
 
 	// --- Health ---
 	appMux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
@@ -921,6 +1249,13 @@ func main() {
 	appMux.HandleFunc("GET /api/vfs/nodes/{nodeId}/mounts/{mountId}/list", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
 		nodeID := r.PathValue("nodeId")
 		mountID := r.PathValue("mountId")
+		u := auth.UserFromContext(r.Context())
+		if isOwner, _ := broker.IsNodeOwner(r.Context(), nodeID, u); !isOwner {
+			if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, nodeID, mountID, "read"); !allowed {
+				writeError(w, http.StatusForbidden, "you do not have access to this folder")
+				return
+			}
+		}
 		client, err := broker.HTTPClientForNode(nodeID)
 		if err != nil {
 			writeError(w, http.StatusServiceUnavailable, "machine is offline")
@@ -1243,6 +1578,128 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = io.Copy(w, resp.Body)
+	}))
+
+	appMux.HandleFunc("POST /api/vfs/nodes/{nodeId}/mounts/{mountId}/rename", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		nodeID := r.PathValue("nodeId")
+		mountID := r.PathValue("mountId")
+		u := auth.UserFromContext(r.Context())
+		ok, err := broker.IsNodeOwner(r.Context(), nodeID, u)
+		if err != nil || !ok {
+			if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, nodeID, mountID, "write"); !allowed {
+				writeError(w, http.StatusForbidden, "you do not have write permission on this folder")
+				return
+			}
+		}
+		client, err := broker.HTTPClientForNode(nodeID)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "machine is offline")
+			return
+		}
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 64*1024))
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, "http://agent/vfs/"+mountID+"/rename", strings.NewReader(string(body)))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "rename failed")
+			return
+		}
+		defer resp.Body.Close()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	}))
+
+	appMux.HandleFunc("GET /api/vfs/search", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		u := auth.UserFromContext(r.Context())
+		q := strings.TrimSpace(r.URL.Query().Get("q"))
+		if q == "" {
+			writeJSON(w, http.StatusOK, map[string]any{"hits": []any{}})
+			return
+		}
+		nodes, err := broker.ListNodesForUser(r.Context(), u)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list nodes")
+			return
+		}
+		type globalHit struct {
+			NodeID    string `json:"node_id"`
+			NodeName  string `json:"node_name"`
+			IsOwnHost bool   `json:"is_own_host"`
+			MountID   string `json:"mount_id"`
+			MountName string `json:"mount_name"`
+			Name      string `json:"name"`
+			Path      string `json:"path"`
+			IsDir     bool   `json:"is_dir"`
+			Size      int64  `json:"size"`
+			ModTime   string `json:"mod_time"`
+			MimeType  string `json:"mime_type"`
+		}
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		results := make([]globalHit, 0, 32)
+		for _, n := range nodes {
+			if n.Status != protocol.NodeStatusOnline {
+				continue
+			}
+			wg.Add(1)
+			go func(node tunnel.NodeView) {
+				defer wg.Done()
+				cli, err := broker.HTTPClientForNode(node.ID)
+				if err != nil {
+					return
+				}
+				params := url.Values{}
+				params.Set("q", q)
+				params.Set("limit", "40")
+				req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, "http://agent/vfs/search?"+params.Encode(), nil)
+				if err != nil {
+					return
+				}
+				resp, err := cli.Do(req)
+				if err != nil || resp.StatusCode != http.StatusOK {
+					if resp != nil {
+						resp.Body.Close()
+					}
+					return
+				}
+				defer resp.Body.Close()
+				var data struct {
+					Hits []vfs.SearchHit `json:"hits"`
+				}
+				if json.NewDecoder(resp.Body).Decode(&data) != nil {
+					return
+				}
+				for _, h := range data.Hits {
+					if !node.IsOwner {
+						if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, node.ID, h.MountID, "read"); !allowed {
+							continue
+						}
+					}
+					mu.Lock()
+					results = append(results, globalHit{
+						NodeID:    node.ID,
+						NodeName:  node.DisplayName,
+						IsOwnHost: node.IsOwner,
+						MountID:   h.MountID,
+						MountName: h.MountName,
+						Name:      h.Name,
+						Path:      h.Path,
+						IsDir:     h.IsDir,
+						Size:      h.Size,
+						ModTime:   h.ModTime,
+						MimeType:  h.MimeType,
+					})
+					mu.Unlock()
+				}
+			}(n)
+		}
+		wg.Wait()
+		writeJSON(w, http.StatusOK, map[string]any{"hits": results})
 	}))
 
 	appMux.HandleFunc("POST /api/vfs/nodes/{nodeId}/mounts/{mountId}/reveal", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
@@ -1659,6 +2116,7 @@ func main() {
 			Metadata:   map[string]any{"kind": req.Kind, "title": req.Title},
 			IPAddress:  audit.ClientIP(r),
 		})
+		eventBus.Publish("announcements.updated", map[string]any{"action": "created", "id": id})
 		writeJSON(w, http.StatusCreated, map[string]any{
 			"announcement": map[string]any{
 				"id":           id,
@@ -1687,6 +2145,7 @@ func main() {
 			TargetID:   id,
 			IPAddress:  audit.ClientIP(r),
 		})
+		eventBus.Publish("announcements.updated", map[string]any{"action": "deleted", "id": id})
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	}))
 
@@ -1763,7 +2222,10 @@ func main() {
 			writeError(w, http.StatusBadRequest, "sdp is required")
 			return
 		}
-		client, err := broker.HTTPClientForNode(r.PathValue("nodeId"))
+		nodeID := r.PathValue("nodeId")
+		u := auth.UserFromContext(r.Context())
+		canWrite, _ := broker.IsNodeOwner(r.Context(), nodeID, u)
+		client, err := broker.HTTPClientForNode(nodeID)
 		if err != nil {
 			writeError(w, http.StatusServiceUnavailable, "machine is offline")
 			return
@@ -1771,6 +2233,7 @@ func main() {
 		payload, _ := json.Marshal(map[string]any{
 			"sdp":          req.SDP,
 			"stun_servers": pol.STUNServers,
+			"can_write":    canWrite,
 		})
 		agentReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, "http://agent/p2p/offer", strings.NewReader(string(payload)))
 		if err != nil {
