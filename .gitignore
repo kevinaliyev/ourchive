@@ -16,6 +16,7 @@ ourchive-agent
 agent.toml
 agent.json
 .env
+/deploy/local/
 
 # Node / Web
 /web/node_modules/
