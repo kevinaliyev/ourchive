@@ -100,6 +100,7 @@ sqlite3 data/ourchive.db ".backup 'data/ourchive-backup-$(date +%F).db'"
 | `OURCHIVE_WEB_DIR` | `web/dist` | Directory containing the built React SPA |
 | `OURCHIVE_DIST_DIR` | `dist` | Directory containing cross-platform `ourchive-agent-*` binaries served at `/downloads/*` |
 | `OURCHIVE_PUBLIC_URL` | `http://localhost:8080` | Public origin of the Hub (used for WebAuthn RP ID/Origin, OIDC callbacks, and default `/downloads`) |
+| `OURCHIVE_HUB_NAME` | *(hostname of `OURCHIVE_PUBLIC_URL`)* | Display name shown in the top-right active Hub status monitor |
 | `OURCHIVE_AGENT_DOWNLOAD_URL` | *(empty)* | Optional override for official signed Agent releases (e.g. GitHub Releases); defaults to `<OURCHIVE_PUBLIC_URL>/downloads` when unset |
 | `OURCHIVE_AGENT_MANIFEST_URL` | *(empty)* | Optional override for the auto-update `manifest.json` URL |
 | `OURCHIVE_SHARE_HOST` | `s.localhost` | Hostname routed to the isolated share handler |

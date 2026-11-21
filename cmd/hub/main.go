@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -27,6 +28,7 @@ import (
 type healthResponse struct {
 	Status    string `json:"status"`
 	Version   string `json:"version"`
+	HubName   string `json:"hub_name"`
 	ShareHost string `json:"share_host"`
 	Time      string `json:"time"`
 }
@@ -47,6 +49,7 @@ type hubApp struct {
 	thumbDir         string
 	webDir           string
 	distDir          string
+	hubName          string
 	publicHubURL     string
 	agentDownloadURL string
 	agentManifestURL string
@@ -62,6 +65,14 @@ func main() {
 	webDir := envOr("OURCHIVE_WEB_DIR", "web/dist")
 	distDir := envOr("OURCHIVE_DIST_DIR", "dist")
 	publicHubURL := strings.TrimRight(envOr("OURCHIVE_PUBLIC_URL", "http://localhost"+addr), "/")
+	hubName := strings.TrimSpace(os.Getenv("OURCHIVE_HUB_NAME"))
+	if hubName == "" {
+		if u, err := url.Parse(publicHubURL); err == nil && u.Hostname() != "" {
+			hubName = u.Hostname()
+		} else {
+			hubName = "Ourchive"
+		}
+	}
 	agentDownloadURL := strings.TrimRight(os.Getenv("OURCHIVE_AGENT_DOWNLOAD_URL"), "/")
 	agentManifestURL := strings.TrimSpace(os.Getenv("OURCHIVE_AGENT_MANIFEST_URL"))
 	_ = os.MkdirAll(thumbDir, 0o755)
@@ -122,6 +133,7 @@ func main() {
 		thumbDir:         thumbDir,
 		webDir:           webDir,
 		distDir:          distDir,
+		hubName:          hubName,
 		publicHubURL:     publicHubURL,
 		agentDownloadURL: agentDownloadURL,
 		agentManifestURL: agentManifestURL,

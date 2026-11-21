@@ -18,6 +18,7 @@ import (
 func (h *hubApp) registerShareRoutes(appMux *http.ServeMux) {
 	store := h.store
 	authSvc := h.authSvc
+	broker := h.broker
 	auditSvc := h.auditSvc
 	eventBus := h.eventBus
 	shareSvc := h.shareSvc
@@ -29,6 +30,23 @@ func (h *hubApp) registerShareRoutes(appMux *http.ServeMux) {
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to list share links")
 			return
+		}
+		if u.Role != auth.RoleHostAdmin {
+			visible := make([]shares.ShareLink, 0, len(list))
+			for _, sl := range list {
+				if sl.CreatedBy == u.ID {
+					visible = append(visible, sl)
+					continue
+				}
+				if isOwner, _ := broker.IsNodeOwner(r.Context(), sl.NodeID, u); isOwner {
+					visible = append(visible, sl)
+					continue
+				}
+				if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, sl.NodeID, sl.MountID, "read"); allowed {
+					visible = append(visible, sl)
+				}
+			}
+			list = visible
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"shares": list})
 	}))
@@ -49,6 +67,19 @@ func (h *hubApp) registerShareRoutes(appMux *http.ServeMux) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
 			return
+		}
+		mountNodeID, err := authSvc.GetMountNodeID(r.Context(), req.MountID)
+		if err != nil || mountNodeID != req.NodeID {
+			writeError(w, http.StatusNotFound, "folder not found on this machine")
+			return
+		}
+		if isOwner, _ := broker.IsNodeOwner(r.Context(), req.NodeID, u); !isOwner {
+			canRead, _ := authSvc.CheckMountScope(r.Context(), u.ID, req.NodeID, req.MountID, "read")
+			canShare, _ := authSvc.CheckMountScope(r.Context(), u.ID, req.NodeID, req.MountID, "share")
+			if !canRead || !canShare {
+				writeError(w, http.StatusForbidden, "you do not have permission to create share links for this folder")
+				return
+			}
 		}
 		link, err := shareSvc.Create(r.Context(), req, u.ID)
 		if errors.Is(err, shares.ErrSlugTaken) {

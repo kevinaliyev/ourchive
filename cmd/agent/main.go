@@ -644,11 +644,17 @@ func validateMounts(mounts []protocol.FolderMount, allowedBaseDirs []string) []p
 			continue
 		}
 
-		if len(allowedBaseDirs) > 0 && !isWithinAllowedDirs(absPath, allowedBaseDirs) {
-			m.Rejected = true
-			m.RejectMsg = "outside local allowed_base_dirs policy"
-			out[i] = m
-			continue
+		if len(allowedBaseDirs) > 0 {
+			checkPath := absPath
+			if evalPath, evalErr := filepath.EvalSymlinks(absPath); evalErr == nil {
+				checkPath = evalPath
+			}
+			if !isWithinAllowedDirs(checkPath, allowedBaseDirs) {
+				m.Rejected = true
+				m.RejectMsg = "outside local allowed_base_dirs policy"
+				out[i] = m
+				continue
+			}
 		}
 
 		info, err := os.Stat(absPath)

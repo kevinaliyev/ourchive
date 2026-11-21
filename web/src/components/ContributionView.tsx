@@ -250,7 +250,11 @@ export function ContributionView({ nodes, onRefresh }: ContributionViewProps) {
                   </div>
 
                   <div className="node-head-right">
-                    <div className="io-pair" aria-label="Live network traffic">
+                    <div
+                      className="io-pair"
+                      aria-label={`Live bandwidth on ${node.display_name}`}
+                      title={`Live bandwidth on ${node.display_name}${node.is_owner ? " (this PC)" : ""} — ↑ upload from this machine · ↓ download to this machine`}
+                    >
                       <span className="io-up">↑ {formatMbps(node.traffic.upload_bps)}</span>
                       <span className="io-down">↓ {formatMbps(node.traffic.download_bps)}</span>
                     </div>

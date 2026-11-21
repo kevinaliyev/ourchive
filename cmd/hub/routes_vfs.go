@@ -89,6 +89,13 @@ func (h *hubApp) registerVFSRoutes(appMux *http.ServeMux) {
 		}
 		nodeID := r.PathValue("nodeId")
 		mountID := r.PathValue("mountId")
+		u := auth.UserFromContext(r.Context())
+		if isOwner, _ := broker.IsNodeOwner(r.Context(), nodeID, u); !isOwner {
+			if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, nodeID, mountID, "read"); !allowed {
+				writeError(w, http.StatusForbidden, "you do not have access to this folder")
+				return
+			}
+		}
 		client, err := broker.HTTPClientForNode(nodeID)
 		if err != nil {
 			writeError(w, http.StatusServiceUnavailable, "machine is offline")
@@ -172,6 +179,13 @@ func (h *hubApp) registerVFSRoutes(appMux *http.ServeMux) {
 		nodeID := r.PathValue("nodeId")
 		mountID := r.PathValue("mountId")
 		relPath := r.URL.Query().Get("path")
+		u := auth.UserFromContext(r.Context())
+		if isOwner, _ := broker.IsNodeOwner(r.Context(), nodeID, u); !isOwner {
+			if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, nodeID, mountID, "read"); !allowed {
+				writeError(w, http.StatusForbidden, "you do not have access to this folder")
+				return
+			}
+		}
 
 		sum := sha256.Sum256([]byte(nodeID + "|" + mountID + "|" + relPath))
 		cacheFile := filepath.Join(thumbDir, hex.EncodeToString(sum[:16])+".webp")
@@ -578,6 +592,12 @@ func (h *hubApp) registerVFSRoutes(appMux *http.ServeMux) {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
+		if isOwner, _ := broker.IsNodeOwner(r.Context(), req.NodeID, u); !isOwner {
+			if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, req.NodeID, req.MountID, "read"); !allowed {
+				writeError(w, http.StatusForbidden, "you do not have access to this folder")
+				return
+			}
+		}
 		tag, err := tagStore.AttachTag(r.Context(), req.TagSlug, req.NodeID, req.MountID, req.RelPath, req.IsDir, u.ID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -587,6 +607,7 @@ func (h *hubApp) registerVFSRoutes(appMux *http.ServeMux) {
 	}))
 
 	appMux.HandleFunc("DELETE /api/tags/detach", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		u := auth.UserFromContext(r.Context())
 		var req struct {
 			TagSlug string `json:"tag_slug"`
 			MountID string `json:"mount_id"`
@@ -595,6 +616,19 @@ func (h *hubApp) registerVFSRoutes(appMux *http.ServeMux) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
 			return
+		}
+		mountNodeID, err := authSvc.GetMountNodeID(r.Context(), req.MountID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "folder not found")
+			return
+		}
+		if u.Role != auth.RoleHostAdmin {
+			if isOwner, _ := broker.IsNodeOwner(r.Context(), mountNodeID, u); !isOwner {
+				if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, mountNodeID, req.MountID, "read"); !allowed {
+					writeError(w, http.StatusForbidden, "you do not have access to this folder")
+					return
+				}
+			}
 		}
 		if err := tagStore.DetachTag(r.Context(), req.TagSlug, req.MountID, req.RelPath); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -615,17 +649,25 @@ func (h *hubApp) registerVFSRoutes(appMux *http.ServeMux) {
 		for _, n := range nodes {
 			nodeByID[n.ID] = n
 		}
-		for i := range items {
-			if nv, ok := nodeByID[items[i].NodeID]; ok {
-				items[i].NodeStatus = nv.Status
-				items[i].Traffic = nv.Traffic
-			} else {
-				items[i].NodeStatus = protocol.NodeStatusOffline
+		visible := make([]vfs.TreeItem, 0, len(items))
+		for _, it := range items {
+			nv, ok := nodeByID[it.NodeID]
+			if !ok || !nv.IsOwner {
+				if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, it.NodeID, it.MountID, "read"); !allowed {
+					continue
+				}
 			}
+			if ok {
+				it.NodeStatus = nv.Status
+				it.Traffic = nv.Traffic
+			} else {
+				it.NodeStatus = protocol.NodeStatusOffline
+			}
+			visible = append(visible, it)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"slug":  vfs.NormalizeTagSlug(r.PathValue("slug")),
-			"items": items,
+			"items": visible,
 		})
 	}))
 
@@ -645,16 +687,30 @@ func (h *hubApp) registerVFSRoutes(appMux *http.ServeMux) {
 		}
 		nodeID := r.PathValue("nodeId")
 		u := auth.UserFromContext(r.Context())
-		canWrite, _ := broker.IsNodeOwner(r.Context(), nodeID, u)
+		isOwner, _ := broker.IsNodeOwner(r.Context(), nodeID, u)
+		allowedReadMounts := []string{}
+		if !isOwner {
+			mounts, _ := broker.ListMounts(r.Context(), nodeID)
+			for _, m := range mounts {
+				if !m.Enabled {
+					continue
+				}
+				if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, nodeID, m.ID, "read"); allowed {
+					allowedReadMounts = append(allowedReadMounts, m.ID)
+				}
+			}
+		}
 		client, err := broker.HTTPClientForNode(nodeID)
 		if err != nil {
 			writeError(w, http.StatusServiceUnavailable, "machine is offline")
 			return
 		}
 		payload, _ := json.Marshal(map[string]any{
-			"sdp":          req.SDP,
-			"stun_servers": pol.STUNServers,
-			"can_write":    canWrite,
+			"sdp":                 req.SDP,
+			"stun_servers":        pol.STUNServers,
+			"can_write":           isOwner,
+			"all_mounts_allowed":  isOwner,
+			"allowed_read_mounts": allowedReadMounts,
 		})
 		agentReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, "http://agent/p2p/offer", strings.NewReader(string(payload)))
 		if err != nil {

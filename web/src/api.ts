@@ -1,6 +1,7 @@
 export interface HealthPayload {
   status: string;
   version: string;
+  hub_name?: string;
   share_host: string;
   time: string;
 }

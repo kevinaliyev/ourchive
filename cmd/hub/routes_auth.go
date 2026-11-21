@@ -787,6 +787,12 @@ func (h *hubApp) registerAuthRoutes(appMux *http.ServeMux) {
 	}))
 
 	appMux.HandleFunc("POST /api/groups/{id}/members", authSvc.RequireRoles([]string{auth.RoleHostAdmin, auth.RoleGroupAdmin}, func(w http.ResponseWriter, r *http.Request) {
+		me := auth.UserFromContext(r.Context())
+		gid := r.PathValue("id")
+		if !authSvc.IsGroupAdminOf(r.Context(), me, gid) {
+			writeError(w, http.StatusForbidden, "only Host Admins or Group Admins of this group can add members")
+			return
+		}
 		var req struct {
 			UserID string `json:"user_id"`
 			Role   string `json:"role"`
@@ -795,7 +801,7 @@ func (h *hubApp) registerAuthRoutes(appMux *http.ServeMux) {
 			writeError(w, http.StatusBadRequest, "user_id is required")
 			return
 		}
-		if err := authSvc.AddGroupMember(r.Context(), r.PathValue("id"), req.UserID, req.Role); err != nil {
+		if err := authSvc.AddGroupMember(r.Context(), gid, req.UserID, req.Role); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -803,7 +809,13 @@ func (h *hubApp) registerAuthRoutes(appMux *http.ServeMux) {
 	}))
 
 	appMux.HandleFunc("DELETE /api/groups/{id}/members/{userId}", authSvc.RequireRoles([]string{auth.RoleHostAdmin, auth.RoleGroupAdmin}, func(w http.ResponseWriter, r *http.Request) {
-		if err := authSvc.RemoveGroupMember(r.Context(), r.PathValue("id"), r.PathValue("userId")); err != nil {
+		me := auth.UserFromContext(r.Context())
+		gid := r.PathValue("id")
+		if !authSvc.IsGroupAdminOf(r.Context(), me, gid) {
+			writeError(w, http.StatusForbidden, "only Host Admins or Group Admins of this group can remove members")
+			return
+		}
+		if err := authSvc.RemoveGroupMember(r.Context(), gid, r.PathValue("userId")); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}

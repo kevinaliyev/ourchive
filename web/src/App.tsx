@@ -217,6 +217,18 @@ export function App() {
   }, [canUseDevConsole]);
   const totalUpBps = nodes.reduce((acc, n) => acc + (n.traffic?.upload_bps ?? 0), 0);
   const totalDownBps = nodes.reduce((acc, n) => acc + (n.traffic?.download_bps ?? 0), 0);
+  const onlineNodes = nodes.filter((n) => n.status === "online");
+  const ownOnlineNodes = onlineNodes.filter((n) => n.is_owner);
+  const activeHubName =
+    hub?.hub_name || (typeof window !== "undefined" ? window.location.hostname : "Ourchive");
+  const headerBandwidthTooltip = [
+    `Combined live bandwidth across ${onlineNodes.length} connected ${onlineNodes.length === 1 ? "machine" : "machines"} on ${activeHubName} (↑ upload · ↓ download)`,
+    ownOnlineNodes.length > 0
+      ? `Includes your local ${ownOnlineNodes.length === 1 ? "machine" : "machines"}: ${ownOnlineNodes
+          .map((n) => `${n.display_name} (↑ ${formatMbps(n.traffic?.upload_bps ?? 0)} · ↓ ${formatMbps(n.traffic?.download_bps ?? 0)})`)
+          .join(", ")}`
+      : "No local contributor machine connected from your account",
+  ].join("\n");
 
   if (auth && !auth.user) {
     return (
@@ -343,13 +355,20 @@ export function App() {
           </div>
 
           <div className="head-metrics">
-            <div className="io-pair" aria-label="Total archive traffic">
+            <div className="io-pair" aria-label="Total archive traffic" title={headerBandwidthTooltip}>
               <span className="io-up">↑ {formatMbps(totalUpBps)}</span>
               <span className="io-down">↓ {formatMbps(totalDownBps)}</span>
             </div>
-            <div className="status-pill">
+            <div
+              className="status-pill"
+              title={
+                hub
+                  ? `Active Hub: ${activeHubName} (v${hub.version}) — ${onlineNodes.length} of ${nodes.length} ${nodes.length === 1 ? "machine" : "machines"} connected`
+                  : `Hub ${activeHubName} is unreachable`
+              }
+            >
               <span className={`dot ${hub ? "" : "offline"}`} />
-              <span>{hub ? `Hub connected (${hub.version})` : "Hub offline"}</span>
+              <span>{hub ? `${activeHubName} connected (${hub.version})` : `${activeHubName} offline`}</span>
             </div>
           </div>
         </div>
@@ -375,8 +394,15 @@ export function App() {
           />
         )}
 
-        {tab === "shares" && (
-          <SharesView shares={shares} onRefresh={refreshShares} onGoToExplorer={() => setTab("explorer")} />
+        {tab === "shares" && auth?.user && (
+          <SharesView
+            currentUser={auth.user}
+            nodes={nodes}
+            netConfig={netConfig}
+            shares={shares}
+            onRefresh={refreshShares}
+            onGoToExplorer={() => setTab("explorer")}
+          />
         )}
 
         <div hidden={tab !== "converter"}>

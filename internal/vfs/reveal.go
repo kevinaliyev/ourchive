@@ -30,6 +30,18 @@ func (s *AgentServer) handleReveal(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if rel != "" {
+			// Verify the target stays inside the mount root (blocks symlink escapes).
+			root, _, err := s.openMountRoot(r.PathValue("mountId"))
+			if err != nil {
+				writeVFSError(w, err)
+				return
+			}
+			_, statErr := root.Stat(filepath.FromSlash(rel))
+			_ = root.Close()
+			if statErr != nil {
+				writeVFSError(w, statErr)
+				return
+			}
 			target = filepath.Join(resolved, filepath.FromSlash(rel))
 		}
 	}

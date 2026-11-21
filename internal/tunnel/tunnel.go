@@ -470,7 +470,7 @@ func (b *Broker) ListNodesForUser(ctx context.Context, currentUser *auth.User) (
 		); err != nil {
 			return nil, err
 		}
-		nv.IsOwner = currentUser != nil && (currentUser.ID == nv.OwnerID || currentUser.Role == auth.RoleHostAdmin)
+		nv.IsOwner = currentUser != nil && currentUser.ID == nv.OwnerID
 		nv.Paused = pausedInt == 1
 		nv.AllowGroupCompute = allowGPUInt == 1
 		if lastSeen.Valid {

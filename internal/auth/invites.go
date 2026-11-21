@@ -138,6 +138,10 @@ func (s *Service) CreateInviteKey(ctx context.Context, actor *User, req CreateIn
 	var groupArg any
 	groupID := strings.TrimSpace(req.GroupID)
 	if groupID != "" {
+		// Prevent privilege escalation: non-host-admins may only attach groups they administer.
+		if actor.Role != RoleHostAdmin && !s.IsGroupAdminOf(ctx, actor, groupID) {
+			return nil, ErrInviteForbidden
+		}
 		groupArg = groupID
 	}
 

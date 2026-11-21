@@ -915,7 +915,10 @@ export function ExplorerView({
                             {node.owner_id === currentUser.id ? " (This PC)" : ""}
                           </span>
                         </span>
-                        <span className="io-pair">
+                        <span
+                          className="io-pair"
+                          title={`Live bandwidth on ${node.display_name}${node.owner_id === currentUser.id ? " (this PC)" : ""} — ↑ upload · ↓ download`}
+                        >
                           <span className="io-up">↑ {formatMbps(node.traffic.upload_bps)}</span>
                           <span className="io-down">↓ {formatMbps(node.traffic.download_bps)}</span>
                         </span>
@@ -986,7 +989,10 @@ export function ExplorerView({
             </div>
 
             <div className="explorer-actions">
-              <div className="io-pair" title={`Live traffic on ${selectedNode.display_name}`}>
+              <div
+                className="io-pair"
+                title={`Live bandwidth on ${selectedNode.display_name}${selectedNode.is_owner ? " (this PC)" : ""} — ↑ upload · ↓ download`}
+              >
                 <span className="io-up">↑ {formatMbps(selectedNode.traffic.upload_bps)}</span>
                 <span className="io-down">↓ {formatMbps(selectedNode.traffic.download_bps)}</span>
               </div>
@@ -1672,7 +1678,10 @@ export function ExplorerView({
                               </span>
                             </td>
                             <td>
-                              <div className="io-pair">
+                              <div
+                                className="io-pair"
+                                title={`Live bandwidth on ${it.node_name} — ↑ upload · ↓ download`}
+                              >
                                 <span className="io-up">↑ {formatMbps(it.traffic.upload_bps)}</span>
                                 <span className="io-down">↓ {formatMbps(it.traffic.download_bps)}</span>
                               </div>

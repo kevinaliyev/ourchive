@@ -77,20 +77,24 @@ func (h *hubApp) registerNodeRoutes(appMux *http.ServeMux) {
 
 	appMux.HandleFunc("DELETE /api/acls/{id}", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
 		u := auth.UserFromContext(r.Context())
+		aclID := r.PathValue("id")
+		aclNodeID, err := authSvc.GetMountACLNodeID(r.Context(), aclID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "ACL not found")
+			return
+		}
 		if u.Role != auth.RoleHostAdmin {
-			// Verify ownership via node_id query parameter or lookup.
-			nodeID := r.URL.Query().Get("node_id")
-			ok, err := broker.IsNodeOwner(r.Context(), nodeID, u)
+			ok, err := broker.IsNodeOwner(r.Context(), aclNodeID, u)
 			if err != nil || !ok {
 				writeError(w, http.StatusForbidden, "forbidden")
 				return
 			}
 		}
-		if err := authSvc.DeleteMountACL(r.Context(), r.PathValue("id")); err != nil {
+		if err := authSvc.DeleteMountACL(r.Context(), aclID); err != nil {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
-		eventBus.Publish("acls.updated", map[string]any{"id": r.PathValue("id")})
+		eventBus.Publish("acls.updated", map[string]any{"id": aclID})
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	}))
 
@@ -455,10 +459,17 @@ func (h *hubApp) registerNodeRoutes(appMux *http.ServeMux) {
 			writeError(w, http.StatusBadRequest, "source_mount_id and target_node_id are required")
 			return
 		}
+		var dbSourceNodeID string
 		var allowSync int
-		if err := store.DB.QueryRowContext(r.Context(), `SELECT allow_sync FROM mounts WHERE id = ?`, req.SourceMountID).Scan(&allowSync); err != nil || allowSync != 1 {
+		if err := store.DB.QueryRowContext(r.Context(), `SELECT node_id, allow_sync FROM mounts WHERE id = ?`, req.SourceMountID).Scan(&dbSourceNodeID, &allowSync); err != nil || allowSync != 1 {
 			writeError(w, http.StatusForbidden, "contributor has not opted this folder into parity sync")
 			return
+		}
+		if isSrcOwner, _ := broker.IsNodeOwner(r.Context(), dbSourceNodeID, u); !isSrcOwner {
+			if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, dbSourceNodeID, req.SourceMountID, "read"); !allowed {
+				writeError(w, http.StatusForbidden, "you do not have read access to this folder")
+				return
+			}
 		}
 		ok, err := broker.IsNodeOwner(r.Context(), req.TargetNodeID, u)
 		if err != nil || !ok {
@@ -470,7 +481,7 @@ func (h *hubApp) registerNodeRoutes(appMux *http.ServeMux) {
 			INSERT INTO sync_subscriptions (id, user_id, source_node_id, source_mount_id, target_node_id, target_path, enabled, created_at)
 			VALUES (?, ?, ?, ?, ?, ?, 1, ?)
 			ON CONFLICT(user_id, source_mount_id, target_node_id) DO UPDATE SET target_path = excluded.target_path, enabled = 1
-		`, id, u.ID, req.SourceNodeID, req.SourceMountID, req.TargetNodeID, strings.TrimSpace(req.TargetPath), time.Now().UTC().Format(time.RFC3339))
+		`, id, u.ID, dbSourceNodeID, req.SourceMountID, req.TargetNodeID, strings.TrimSpace(req.TargetPath), time.Now().UTC().Format(time.RFC3339))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return

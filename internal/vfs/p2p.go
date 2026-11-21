@@ -22,9 +22,11 @@ import (
 const partFileSuffix = ".ourchive.part"
 
 type p2pOfferRequest struct {
-	SDP         string   `json:"sdp"`
-	STUNServers []string `json:"stun_servers"`
-	CanWrite    bool     `json:"can_write"`
+	SDP               string   `json:"sdp"`
+	STUNServers       []string `json:"stun_servers"`
+	CanWrite          bool     `json:"can_write"`
+	AllMountsAllowed  bool     `json:"all_mounts_allowed,omitempty"`
+	AllowedReadMounts []string `json:"allowed_read_mounts,omitempty"`
 }
 
 type p2pFileRequest struct {
@@ -62,6 +64,16 @@ func (s *AgentServer) handleP2POffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	canWrite := req.CanWrite && !cfg.ReadOnly
+	allowedRead := make(map[string]bool, len(req.AllowedReadMounts))
+	for _, mid := range req.AllowedReadMounts {
+		allowedRead[mid] = true
+	}
+	canReadMount := func(mountID string) bool {
+		if req.AllMountsAllowed {
+			return true
+		}
+		return allowedRead[mountID]
+	}
 
 	iceServers := []webrtc.ICEServer{}
 	if len(req.STUNServers) > 0 {
@@ -215,8 +227,16 @@ func (s *AgentServer) handleP2POffer(w http.ResponseWriter, r *http.Request) {
 
 			switch fileReq.Action {
 			case "get":
+				if !canReadMount(fileReq.MountID) {
+					_ = dc.SendText(`{"ok":false,"error":"read access denied for this folder"}`)
+					return
+				}
 				go s.streamFileOverDataChannel(dc, fileReq)
 			case "zip":
+				if !canReadMount(fileReq.MountID) {
+					_ = dc.SendText(`{"ok":false,"error":"read access denied for this folder"}`)
+					return
+				}
 				go s.streamZipOverDataChannel(dc, fileReq)
 			case "put":
 				if !canWrite {

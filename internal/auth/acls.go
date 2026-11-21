@@ -103,6 +103,24 @@ func (s *Service) UpsertMountACL(ctx context.Context, a MountACL) (*MountACL, er
 	return &a, nil
 }
 
+func (s *Service) GetMountACLNodeID(ctx context.Context, id string) (string, error) {
+	var nodeID string
+	err := s.store.DB.QueryRowContext(ctx, `SELECT node_id FROM mount_group_acls WHERE id = ?`, id).Scan(&nodeID)
+	if err != nil {
+		return "", ErrNotFound
+	}
+	return nodeID, nil
+}
+
+func (s *Service) GetMountNodeID(ctx context.Context, mountID string) (string, error) {
+	var nodeID string
+	err := s.store.DB.QueryRowContext(ctx, `SELECT node_id FROM mounts WHERE id = ?`, mountID).Scan(&nodeID)
+	if err != nil {
+		return "", ErrNotFound
+	}
+	return nodeID, nil
+}
+
 func (s *Service) DeleteMountACL(ctx context.Context, id string) error {
 	res, err := s.store.DB.ExecContext(ctx, `DELETE FROM mount_group_acls WHERE id = ?`, id)
 	if err != nil {
