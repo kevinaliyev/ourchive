@@ -1,8 +1,10 @@
+# syntax=docker/dockerfile:1
+
 # Stage 1: Build React Web UI
 FROM node:22-alpine AS web-builder
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY web/ ./
 RUN npm run build
 
@@ -10,13 +12,17 @@ RUN npm run build
 FROM golang:1.26-alpine AS go-builder
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 COPY pkg/ ./pkg/
 COPY scripts/ ./scripts/
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/ourchive-hub ./cmd/hub \
-    && mkdir -p /out/dist \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/ourchive-hub ./cmd/hub
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    mkdir -p /out/dist \
     && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o /out/dist/ourchive-agent-windows-amd64.exe ./cmd/agent \
     && CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o /out/dist/ourchive-agent-darwin-amd64 ./cmd/agent \
     && CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o /out/dist/ourchive-agent-darwin-arm64 ./cmd/agent \
