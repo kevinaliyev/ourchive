@@ -11,6 +11,7 @@ First, generate a one-time enrollment token in the Web UI under **Contribution s
 ### Windows (PowerShell)
 ```powershell
 $repo="OWNER/REPO"; $hub="https://archive.yourdomain.com"; $tok="TOKEN"
+Stop-Process -Name ourchive-agent -Force -ErrorAction SilentlyContinue
 $dir="$env:LOCALAPPDATA\Ourchive"; New-Item -ItemType Directory -Force $dir | Out-Null
 $exe="$dir\ourchive-agent.exe"
 Invoke-WebRequest "https://github.com/$repo/releases/latest/download/ourchive-agent-windows-amd64.exe" -OutFile $exe
