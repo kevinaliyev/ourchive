@@ -659,8 +659,14 @@ input[type="checkbox"][switch]:focus-visible {
 
 .node-controls {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sp-3);
+}
+
+@media (max-width: 760px) {
+  .node-controls {
+    grid-template-columns: 1fr;
+  }
 }
 
 .switch-row,
@@ -668,11 +674,19 @@ input[type="checkbox"][switch]:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--sp-3);
   padding: 12px 14px;
+  min-width: 0;
   border-radius: var(--radius-sm);
   background: var(--bg-canvas);
   border: 1px solid var(--border-hairline);
+}
+
+.switch-row > :first-child,
+.cap-row > :first-child {
+  min-width: 0;
+  flex: 1 1 160px;
 }
 
 .switch-row strong,
@@ -694,6 +708,7 @@ input[type="checkbox"][switch]:focus-visible {
 .cap-input-group {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   flex-shrink: 0;
 }

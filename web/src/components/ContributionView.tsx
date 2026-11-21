@@ -420,11 +420,11 @@ export function ContributionView({ nodes, onRefresh }: ContributionViewProps) {
 
                     <div className="cap-row">
                       <div>
-                        <strong>Default visibility &amp; user access</strong>
+                        <strong>Default visibility</strong>
                         <small>
                           {node.visibility === "private"
-                            ? "Private — only users you explicitly allow can see folders on this machine"
-                            : "Open to hub — everyone has full access unless restricted per user or folder"}
+                            ? "Private — only allowed users see this machine"
+                            : "Open to hub unless restricted per user or folder"}
                         </small>
                       </div>
                       <div className="cap-input-group">
@@ -452,7 +452,7 @@ export function ContributionView({ nodes, onRefresh }: ContributionViewProps) {
                           onClick={() => void openAccessModal(node, null)}
                         >
                           <Shield size={14} strokeWidth={1.6} />
-                          <span>User access</span>
+                          <span>Users</span>
                         </button>
                       </div>
                     </div>
