@@ -162,7 +162,7 @@ export function AuthView({ initialized, identityMode, onAuthenticated }: AuthVie
               <path d="M4 7h16M4 12h16M4 17h10" />
             </svg>
           </span>
-          <span>Ourchive</span>
+          <span>ourchive</span>
         </div>
 
         <h1 id="signin-heading" className="page-title" style={{ marginTop: 16 }}>

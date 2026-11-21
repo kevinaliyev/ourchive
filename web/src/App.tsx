@@ -241,7 +241,7 @@ export function App() {
                   <path d="M4 7h16M4 12h16M4 17h10" />
                 </svg>
               </span>
-              <span>Ourchive</span>
+              <span>ourchive</span>
             </div>
             <div className="segmented" role="group" aria-label="Color scheme">
               <button className="seg-btn" aria-pressed={scheme === "dark"} onClick={() => setScheme("dark")}>
@@ -272,7 +272,7 @@ export function App() {
                 <path d="M4 7h16M4 12h16M4 17h10" />
               </svg>
             </span>
-            <span>Ourchive</span>
+            <span>ourchive</span>
           </div>
 
           <nav className="nav-links" aria-label="Primary">
