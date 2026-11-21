@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ourchive/ourchive/internal/audit"
 	"github.com/ourchive/ourchive/internal/auth"
 	"github.com/ourchive/ourchive/internal/db"
 	"github.com/ourchive/ourchive/internal/settings"
@@ -100,11 +101,66 @@ type Service struct {
 	store        *db.Store
 	broker       *tunnel.Broker
 	settings     *settings.Store
+	audit        *audit.Service
 	shareBaseURL string
 	thumbDir     string
 	cookieSecret []byte
 	rateMu       sync.Mutex
 	rateByIP     map[string]*ipBucket
+}
+
+// SetAudit attaches an audit.Service so public share link views, embeds, and downloads
+// record the visitor IP address, user-agent, and referer in the Hub audit log.
+func (s *Service) SetAudit(a *audit.Service) {
+	s.audit = a
+}
+
+func isEmbedBotUA(ua string) bool {
+	u := strings.ToLower(ua)
+	for _, tok := range []string{"bot", "discord", "slack", "twitter", "telegram", "whatsapp", "facebookexternalhit", "embedly", "unfurl"} {
+		if strings.Contains(u, tok) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) logPublicAccess(r *http.Request, sl *ShareLink, action string) {
+	if s.audit == nil || sl == nil || r == nil {
+		return
+	}
+	ua := r.UserAgent()
+	if len(ua) > 200 {
+		ua = ua[:200]
+	}
+	isBot := isEmbedBotUA(ua)
+	actor := "Public visitor"
+	if isBot {
+		actor = "Embed bot"
+	}
+	meta := map[string]any{
+		"title":      sl.Title,
+		"node_id":    sl.NodeID,
+		"mount_id":   sl.MountID,
+		"rel_path":   sl.RelPath,
+		"user_agent": ua,
+		"is_bot":     isBot,
+	}
+	if ref := strings.TrimSpace(r.Referer()); ref != "" {
+		if len(ref) > 200 {
+			ref = ref[:200]
+		}
+		meta["referer"] = ref
+	}
+	s.audit.Log(r.Context(), audit.Entry{
+		Category:   audit.CategoryCore,
+		Action:     action,
+		ActorLabel: actor,
+		TargetType: "share",
+		TargetID:   sl.Slug,
+		Metadata:   meta,
+		IPAddress:  audit.ClientIP(r),
+	})
 }
 
 type ipBucket struct {
@@ -523,10 +579,10 @@ func (s *Service) handleSharePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Don't double-count bot preview fetches as views.
-	ua := strings.ToLower(r.UserAgent())
-	if !strings.Contains(ua, "bot") && !strings.Contains(ua, "discord") && !strings.Contains(ua, "slack") && !strings.Contains(ua, "twitter") {
+	if !isEmbedBotUA(r.UserAgent()) {
 		s.incrementViews(r.Context(), slug)
 	}
+	s.logPublicAccess(r, sl, "share.link_viewed")
 
 	scheme := "http"
 	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
@@ -619,6 +675,7 @@ func (s *Service) handleOEmbed(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	s.logPublicAccess(r, sl, "share.embed_fetched")
 	scheme := "http"
 	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
 		scheme = "https"
@@ -647,6 +704,7 @@ func (s *Service) handleThumb(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
+	s.logPublicAccess(r, sl, "share.embed_thumb")
 
 	sum := sha256.Sum256([]byte(sl.NodeID + "|" + sl.MountID + "|" + sl.RelPath))
 	cacheFile := filepath.Join(s.thumbDir, hex.EncodeToString(sum[:16])+".webp")
@@ -711,6 +769,17 @@ func (s *Service) handleRaw(w http.ResponseWriter, r *http.Request) {
 	if !s.isUnlocked(r, sl) {
 		http.Error(w, "password required", http.StatusUnauthorized)
 		return
+	}
+
+	if r.Method == http.MethodGet {
+		rangeHdr := r.Header.Get("Range")
+		if rangeHdr == "" || strings.HasPrefix(rangeHdr, "bytes=0-") {
+			act := "share.embed_streamed"
+			if sl.IsDir || r.URL.Query().Get("download") == "1" {
+				act = "share.downloaded"
+			}
+			s.logPublicAccess(r, sl, act)
+		}
 	}
 
 	// Enforce Host Admin public share relay policy.

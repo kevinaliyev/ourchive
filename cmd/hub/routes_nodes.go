@@ -98,6 +98,82 @@ func (h *hubApp) registerNodeRoutes(appMux *http.ServeMux) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	}))
 
+	// --- Member Directory & Per-User Share Access Rules ---
+	appMux.HandleFunc("GET /api/members", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		members, err := authSvc.ListMemberDirectory(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list members")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"members": members})
+	}))
+
+	appMux.HandleFunc("GET /api/access-rules", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		u := auth.UserFromContext(r.Context())
+		nodeID := r.URL.Query().Get("node_id")
+		if nodeID == "" {
+			writeError(w, http.StatusBadRequest, "node_id is required")
+			return
+		}
+		if u.Role != auth.RoleHostAdmin {
+			ok, err := broker.IsNodeOwner(r.Context(), nodeID, u)
+			if err != nil || !ok {
+				writeError(w, http.StatusForbidden, "only the machine owner can view access rules")
+				return
+			}
+		}
+		filterMount := r.URL.Query().Has("mount_id")
+		mountID := r.URL.Query().Get("mount_id")
+		rules, err := authSvc.ListShareUserRules(r.Context(), nodeID, mountID, filterMount)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"rules": rules})
+	}))
+
+	appMux.HandleFunc("PUT /api/access-rules", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		u := auth.UserFromContext(r.Context())
+		var req auth.ShareUserRule
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		ok, err := broker.IsNodeOwner(r.Context(), req.NodeID, u)
+		if err != nil || !ok {
+			writeError(w, http.StatusForbidden, "only the machine owner can manage user access rules")
+			return
+		}
+		saved, err := authSvc.UpsertShareUserRule(r.Context(), req)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		eventBus.Publish("acls.updated", map[string]any{"node_id": req.NodeID, "mount_id": req.MountID})
+		writeJSON(w, http.StatusOK, map[string]any{"rule": saved})
+	}))
+
+	appMux.HandleFunc("DELETE /api/access-rules/{id}", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		u := auth.UserFromContext(r.Context())
+		ruleID := r.PathValue("id")
+		nodeID, err := authSvc.GetShareUserRuleNodeID(r.Context(), ruleID)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "access rule not found")
+			return
+		}
+		ok, err := broker.IsNodeOwner(r.Context(), nodeID, u)
+		if err != nil || !ok {
+			writeError(w, http.StatusForbidden, "only the machine owner can remove user access rules")
+			return
+		}
+		if err := authSvc.DeleteShareUserRule(r.Context(), ruleID); err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		eventBus.Publish("acls.updated", map[string]any{"id": ruleID, "node_id": nodeID})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	}))
+
 	// --- Nodes & Contribution Settings ---
 	appMux.HandleFunc("GET /api/nodes", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
 		u := auth.UserFromContext(r.Context())
@@ -106,7 +182,32 @@ func (h *hubApp) registerNodeRoutes(appMux *http.ServeMux) {
 			writeError(w, http.StatusInternalServerError, "failed to list nodes")
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes})
+		filtered := nodes[:0]
+		for i := range nodes {
+			n := nodes[i]
+			if n.IsOwner {
+				for j := range n.Mounts {
+					n.Mounts[j].Access = "all"
+				}
+				filtered = append(filtered, n)
+				continue
+			}
+			visibleMounts := make([]protocol.FolderMount, 0, len(n.Mounts))
+			for _, m := range n.Mounts {
+				acc, err := authSvc.EffectiveMountAccess(r.Context(), u.ID, n.ID, m.ID)
+				if err != nil || !acc.CanList {
+					continue
+				}
+				m.Access = acc.Level
+				visibleMounts = append(visibleMounts, m)
+			}
+			n.Mounts = visibleMounts
+			if len(visibleMounts) == 0 && u.Role != auth.RoleHostAdmin && authSvc.IsUserRestrictedFromNode(r.Context(), u.ID, n.ID) {
+				continue
+			}
+			filtered = append(filtered, n)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"nodes": filtered})
 	}))
 
 	appMux.HandleFunc("POST /api/nodes/enroll-token", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
@@ -172,6 +273,7 @@ func (h *hubApp) registerNodeRoutes(appMux *http.ServeMux) {
 		var req struct {
 			DisplayName       *string `json:"display_name"`
 			Paused            *bool   `json:"paused"`
+			Visibility        *string `json:"visibility"`
 			UploadCapMbps     *int    `json:"upload_cap_mbps"`
 			AllowGroupCompute *bool   `json:"allow_group_compute"`
 		}
@@ -181,13 +283,22 @@ func (h *hubApp) registerNodeRoutes(appMux *http.ServeMux) {
 		}
 
 		// Non-owner Host Admins may ONLY pause/shut off a node — never mutate its owner settings.
-		if !isOwner && (req.DisplayName != nil || req.UploadCapMbps != nil || req.AllowGroupCompute != nil) {
+		if !isOwner && (req.DisplayName != nil || req.Visibility != nil || req.UploadCapMbps != nil || req.AllowGroupCompute != nil) {
 			writeError(w, http.StatusForbidden, "only the machine owner can modify node settings (Host Admins may only pause/shut off)")
 			return
 		}
 
 		if isOwner && req.DisplayName != nil && strings.TrimSpace(*req.DisplayName) != "" {
 			_, _ = store.DB.ExecContext(r.Context(), `UPDATE nodes SET display_name = ? WHERE id = ?`, strings.TrimSpace(*req.DisplayName), nodeID)
+		}
+		if isOwner && req.Visibility != nil {
+			vis := strings.ToLower(strings.TrimSpace(*req.Visibility))
+			if vis != "open" && vis != "private" {
+				writeError(w, http.StatusBadRequest, "visibility must be 'open' or 'private'")
+				return
+			}
+			_, _ = store.DB.ExecContext(r.Context(), `UPDATE nodes SET visibility = ? WHERE id = ?`, vis, nodeID)
+			eventBus.Publish("acls.updated", map[string]any{"node_id": nodeID})
 		}
 		if req.Paused != nil {
 			v := 0
@@ -297,9 +408,10 @@ func (h *hubApp) registerNodeRoutes(appMux *http.ServeMux) {
 			return
 		}
 		var req struct {
-			Name      *string `json:"name"`
-			Enabled   *bool   `json:"enabled"`
-			AllowSync *bool   `json:"allow_sync"`
+			Name       *string `json:"name"`
+			Enabled    *bool   `json:"enabled"`
+			AllowSync  *bool   `json:"allow_sync"`
+			Visibility *string `json:"visibility"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -307,6 +419,15 @@ func (h *hubApp) registerNodeRoutes(appMux *http.ServeMux) {
 		}
 		if req.Name != nil && strings.TrimSpace(*req.Name) != "" {
 			_, _ = store.DB.ExecContext(r.Context(), `UPDATE mounts SET name = ? WHERE id = ? AND node_id = ?`, strings.TrimSpace(*req.Name), mountID, nodeID)
+		}
+		if req.Visibility != nil {
+			vis := strings.ToLower(strings.TrimSpace(*req.Visibility))
+			if vis != "inherit" && vis != "open" && vis != "private" {
+				writeError(w, http.StatusBadRequest, "visibility must be 'inherit', 'open', or 'private'")
+				return
+			}
+			_, _ = store.DB.ExecContext(r.Context(), `UPDATE mounts SET visibility = ? WHERE id = ? AND node_id = ?`, vis, mountID, nodeID)
+			eventBus.Publish("acls.updated", map[string]any{"node_id": nodeID, "mount_id": mountID})
 		}
 		if req.Enabled != nil {
 			v := 0
@@ -466,8 +587,8 @@ func (h *hubApp) registerNodeRoutes(appMux *http.ServeMux) {
 			return
 		}
 		if isSrcOwner, _ := broker.IsNodeOwner(r.Context(), dbSourceNodeID, u); !isSrcOwner {
-			if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, dbSourceNodeID, req.SourceMountID, "read"); !allowed {
-				writeError(w, http.StatusForbidden, "you do not have read access to this folder")
+			if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, dbSourceNodeID, req.SourceMountID, "download"); !allowed {
+				writeError(w, http.StatusForbidden, "you do not have download access to this folder")
 				return
 			}
 		}

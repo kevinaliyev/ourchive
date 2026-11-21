@@ -36,7 +36,9 @@ type FolderMount struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
 	LocalPath  string `json:"local_path"`
-	Kind       string `json:"kind,omitempty"` // "folder" (default) | "file"
+	Kind       string `json:"kind,omitempty"`       // "folder" (default) | "file"
+	Visibility string `json:"visibility,omitempty"` // "inherit" (default) | "open" | "private"
+	Access     string `json:"access,omitempty"`     // effective access for viewer: "all" | "view" | "download"
 	Enabled    bool   `json:"enabled"`
 	AllowSync  bool   `json:"allow_sync"`
 	TotalBytes int64  `json:"total_bytes,omitempty"`

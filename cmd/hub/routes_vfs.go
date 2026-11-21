@@ -91,8 +91,14 @@ func (h *hubApp) registerVFSRoutes(appMux *http.ServeMux) {
 		mountID := r.PathValue("mountId")
 		u := auth.UserFromContext(r.Context())
 		if isOwner, _ := broker.IsNodeOwner(r.Context(), nodeID, u); !isOwner {
-			if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, nodeID, mountID, "read"); !allowed {
-				writeError(w, http.StatusForbidden, "you do not have access to this folder")
+			reqScope := "view"
+			denyMsg := "you do not have preview permission on this folder"
+			if r.URL.Query().Get("download") == "1" {
+				reqScope = "download"
+				denyMsg = "you do not have download permission on this folder"
+			}
+			if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, nodeID, mountID, reqScope); !allowed {
+				writeError(w, http.StatusForbidden, denyMsg)
 				return
 			}
 		}
@@ -181,8 +187,8 @@ func (h *hubApp) registerVFSRoutes(appMux *http.ServeMux) {
 		relPath := r.URL.Query().Get("path")
 		u := auth.UserFromContext(r.Context())
 		if isOwner, _ := broker.IsNodeOwner(r.Context(), nodeID, u); !isOwner {
-			if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, nodeID, mountID, "read"); !allowed {
-				writeError(w, http.StatusForbidden, "you do not have access to this folder")
+			if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, nodeID, mountID, "view"); !allowed {
+				writeError(w, http.StatusForbidden, "you do not have preview permission on this folder")
 				return
 			}
 		}
@@ -695,7 +701,7 @@ func (h *hubApp) registerVFSRoutes(appMux *http.ServeMux) {
 				if !m.Enabled {
 					continue
 				}
-				if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, nodeID, m.ID, "read"); allowed {
+				if allowed, _ := authSvc.CheckMountScope(r.Context(), u.ID, nodeID, m.ID, "download"); allowed {
 					allowedReadMounts = append(allowedReadMounts, m.ID)
 				}
 			}

@@ -66,6 +66,7 @@ type NodeView struct {
 	Arch              string                       `json:"arch"`
 	Status            protocol.NodeStatus          `json:"status"`
 	Paused            bool                         `json:"paused"`
+	Visibility        string                       `json:"visibility"` // "open" | "private"
 	UploadCapMbps     int                          `json:"upload_cap_mbps"`
 	AllowGroupCompute bool                         `json:"allow_group_compute"`
 	Compute           protocol.ComputeCapabilities `json:"compute"`
@@ -421,7 +422,7 @@ func (b *Broker) HTTPClientForNode(nodeID string) (*http.Client, error) {
 
 func (b *Broker) ListMounts(ctx context.Context, nodeID string) ([]protocol.FolderMount, error) {
 	rows, err := b.store.DB.QueryContext(ctx,
-		`SELECT id, name, local_path, kind, enabled, allow_sync FROM mounts WHERE node_id = ? ORDER BY created_at ASC`, nodeID,
+		`SELECT id, name, local_path, kind, visibility, enabled, allow_sync FROM mounts WHERE node_id = ? ORDER BY created_at ASC`, nodeID,
 	)
 	if err != nil {
 		return nil, err
@@ -431,11 +432,14 @@ func (b *Broker) ListMounts(ctx context.Context, nodeID string) ([]protocol.Fold
 	for rows.Next() {
 		var m protocol.FolderMount
 		var en, syncInt int
-		if err := rows.Scan(&m.ID, &m.Name, &m.LocalPath, &m.Kind, &en, &syncInt); err != nil {
+		if err := rows.Scan(&m.ID, &m.Name, &m.LocalPath, &m.Kind, &m.Visibility, &en, &syncInt); err != nil {
 			return nil, err
 		}
 		if m.Kind == "" {
 			m.Kind = "folder"
+		}
+		if m.Visibility == "" {
+			m.Visibility = "inherit"
 		}
 		m.Enabled = en == 1
 		m.AllowSync = syncInt == 1
@@ -448,7 +452,7 @@ func (b *Broker) ListMounts(ctx context.Context, nodeID string) ([]protocol.Fold
 func (b *Broker) ListNodesForUser(ctx context.Context, currentUser *auth.User) ([]NodeView, error) {
 	rows, err := b.store.DB.QueryContext(ctx, `
 		SELECT n.id, n.owner_id, u.display_name, n.display_name, n.os, n.arch, n.status,
-		       n.paused, n.upload_cap_mbps, n.allow_group_compute, n.capabilities_json, n.last_seen_at, n.created_at
+		       n.paused, n.visibility, n.upload_cap_mbps, n.allow_group_compute, n.capabilities_json, n.last_seen_at, n.created_at
 		FROM nodes n
 		JOIN users u ON u.id = n.owner_id
 		ORDER BY n.created_at ASC
@@ -466,9 +470,12 @@ func (b *Broker) ListNodesForUser(ctx context.Context, currentUser *auth.User) (
 		var lastSeen sql.NullString
 		if err := rows.Scan(
 			&nv.ID, &nv.OwnerID, &nv.OwnerName, &nv.DisplayName, &nv.OS, &nv.Arch, &statusStr,
-			&pausedInt, &nv.UploadCapMbps, &allowGPUInt, &capsJSON, &lastSeen, &nv.CreatedAt,
+			&pausedInt, &nv.Visibility, &nv.UploadCapMbps, &allowGPUInt, &capsJSON, &lastSeen, &nv.CreatedAt,
 		); err != nil {
 			return nil, err
+		}
+		if nv.Visibility == "" {
+			nv.Visibility = "open"
 		}
 		nv.IsOwner = currentUser != nil && currentUser.ID == nv.OwnerID
 		nv.Paused = pausedInt == 1

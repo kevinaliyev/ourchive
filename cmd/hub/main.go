@@ -117,6 +117,7 @@ func main() {
 
 	shareBaseURL := envOr("OURCHIVE_SHARE_URL", "http://"+shareHost+addr)
 	shareSvc := shares.NewService(store, broker, settingsStore, shareBaseURL, thumbDir)
+	shareSvc.SetAudit(auditSvc)
 
 	hub := &hubApp{
 		store:         store,

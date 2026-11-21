@@ -3,8 +3,8 @@
  * opt-in local mirroring consent, GPU compute participation, and vendor-colored hardware readout.
  */
 import { FormEvent, useState } from "react";
-import { Check, Copy, Cpu, FilePlus2, FolderOpen, FolderPlus, Microchip, Monitor, Plus, Trash2 } from "lucide-react";
-import { api, EnrollTokenResponse, formatMbps, NodeView } from "../api";
+import { Check, Copy, Cpu, FilePlus2, FolderOpen, FolderPlus, Lock, Microchip, Monitor, Plus, Shield, Trash2 } from "lucide-react";
+import { api, EnrollTokenResponse, FolderMount, formatMbps, MemberSummary, NodeView, ShareAccessLevel, ShareUserRule } from "../api";
 import { ModalDialog } from "./ModalDialog";
 
 function vendorClass(name?: string): "hw-amd" | "hw-intel" | "hw-nvidia" | "hw-unknown" {
@@ -36,6 +36,124 @@ export function ContributionView({ nodes, onRefresh }: ContributionViewProps) {
   >({});
   const [capDrafts, setCapDrafts] = useState<Record<string, string>>({});
   const [pickingNodeId, setPickingNodeId] = useState<string | null>(null);
+
+  const [accessTarget, setAccessTarget] = useState<{ nodeId: string; mountId: string | null } | null>(null);
+  const [members, setMembers] = useState<MemberSummary[]>([]);
+  const [accessRules, setAccessRules] = useState<ShareUserRule[]>([]);
+  const [accessLoading, setAccessLoading] = useState(false);
+  const [accessBusy, setAccessBusy] = useState(false);
+  const [accessError, setAccessError] = useState<string | null>(null);
+  const [ruleUserId, setRuleUserId] = useState("");
+  const [ruleAccess, setRuleAccess] = useState<ShareAccessLevel>("none");
+
+  const activeAccessNode = accessTarget ? nodes.find((n) => n.id === accessTarget.nodeId) ?? null : null;
+  const activeAccessMount =
+    accessTarget && accessTarget.mountId && activeAccessNode
+      ? activeAccessNode.mounts.find((m) => m.id === accessTarget.mountId) ?? null
+      : null;
+
+  async function openAccessModal(node: NodeView, mount: FolderMount | null) {
+    setAccessTarget({ nodeId: node.id, mountId: mount ? mount.id : null });
+    setAccessError(null);
+    setAccessLoading(true);
+    setRuleUserId("");
+    setRuleAccess((mount?.visibility === "private" || (!mount && node.visibility === "private")) ? "all" : "none");
+    try {
+      const [memRes, ruleRes] = await Promise.all([
+        api.listMembers(),
+        api.listAccessRules(node.id, mount ? mount.id : ""),
+      ]);
+      const otherMembers = memRes.members.filter((m) => m.id !== node.owner_id);
+      setMembers(otherMembers);
+      setAccessRules(ruleRes.rules);
+      if (otherMembers.length > 0) {
+        setRuleUserId(otherMembers[0].id);
+      }
+    } catch (err) {
+      setAccessError(err instanceof Error ? err.message : "Failed to load access rules");
+    } finally {
+      setAccessLoading(false);
+    }
+  }
+
+  async function handleSetNodeVisibility(nodeId: string, visibility: "open" | "private") {
+    setAccessBusy(true);
+    setAccessError(null);
+    try {
+      await api.updateNodeConfig(nodeId, { visibility });
+      await onRefresh();
+    } catch (err) {
+      setAccessError(err instanceof Error ? err.message : "Failed to update visibility");
+    } finally {
+      setAccessBusy(false);
+    }
+  }
+
+  async function handleSetMountVisibility(nodeId: string, mountId: string, visibility: "inherit" | "open" | "private") {
+    setAccessBusy(true);
+    setAccessError(null);
+    try {
+      await api.updateMount(nodeId, mountId, { visibility });
+      await onRefresh();
+    } catch (err) {
+      setAccessError(err instanceof Error ? err.message : "Failed to update folder visibility");
+    } finally {
+      setAccessBusy(false);
+    }
+  }
+
+  async function handleSaveAccessRule(e: FormEvent) {
+    e.preventDefault();
+    if (!accessTarget || !ruleUserId) return;
+    setAccessBusy(true);
+    setAccessError(null);
+    try {
+      await api.upsertAccessRule({
+        node_id: accessTarget.nodeId,
+        mount_id: accessTarget.mountId ?? "",
+        user_id: ruleUserId,
+        access: ruleAccess,
+      });
+      const res = await api.listAccessRules(accessTarget.nodeId, accessTarget.mountId ?? "");
+      setAccessRules(res.rules);
+    } catch (err) {
+      setAccessError(err instanceof Error ? err.message : "Failed to save user rule");
+    } finally {
+      setAccessBusy(false);
+    }
+  }
+
+  async function handleUpdateRuleLevel(rule: ShareUserRule, access: ShareAccessLevel) {
+    setAccessBusy(true);
+    setAccessError(null);
+    try {
+      await api.upsertAccessRule({
+        node_id: rule.node_id,
+        mount_id: rule.mount_id,
+        user_id: rule.user_id,
+        access,
+      });
+      const res = await api.listAccessRules(rule.node_id, rule.mount_id);
+      setAccessRules(res.rules);
+    } catch (err) {
+      setAccessError(err instanceof Error ? err.message : "Failed to update user rule");
+    } finally {
+      setAccessBusy(false);
+    }
+  }
+
+  async function handleDeleteAccessRule(rule: ShareUserRule) {
+    setAccessBusy(true);
+    setAccessError(null);
+    try {
+      await api.deleteAccessRule(rule.id);
+      setAccessRules((prev) => prev.filter((r) => r.id !== rule.id));
+    } catch (err) {
+      setAccessError(err instanceof Error ? err.message : "Failed to remove user rule");
+    } finally {
+      setAccessBusy(false);
+    }
+  }
 
   async function handlePick(node: NodeView, kind: "folder" | "file") {
     setError(null);
@@ -302,6 +420,45 @@ export function ContributionView({ nodes, onRefresh }: ContributionViewProps) {
 
                     <div className="cap-row">
                       <div>
+                        <strong>Default visibility &amp; user access</strong>
+                        <small>
+                          {node.visibility === "private"
+                            ? "Private — only users you explicitly allow can see folders on this machine"
+                            : "Open to hub — everyone has full access unless restricted per user or folder"}
+                        </small>
+                      </div>
+                      <div className="cap-input-group">
+                        <div className="seg-control" role="group" aria-label={`Visibility for ${node.display_name}`}>
+                          <button
+                            type="button"
+                            className="seg-btn"
+                            aria-pressed={node.visibility !== "private"}
+                            onClick={() => void handleSetNodeVisibility(node.id, "open")}
+                          >
+                            Open
+                          </button>
+                          <button
+                            type="button"
+                            className="seg-btn"
+                            aria-pressed={node.visibility === "private"}
+                            onClick={() => void handleSetNodeVisibility(node.id, "private")}
+                          >
+                            Private
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() => void openAccessModal(node, null)}
+                        >
+                          <Shield size={14} strokeWidth={1.6} />
+                          <span>User access</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="cap-row">
+                      <div>
                         <strong>Upload speed limit</strong>
                         <small>0 Mbps means unlimited</small>
                       </div>
@@ -337,12 +494,31 @@ export function ContributionView({ nodes, onRefresh }: ContributionViewProps) {
                             <div className="mount-name-row">
                               <span className="mount-name">{m.name}</span>
                               <span className="tag-chip mono">{m.kind === "file" ? "File" : "Folder"}</span>
+                              {m.visibility === "private" && (
+                                <span className="tag-chip mono" title="Private allowlist only">
+                                  <Lock size={11} strokeWidth={1.7} /> Private
+                                </span>
+                              )}
+                              {m.visibility === "open" && node.visibility === "private" && (
+                                <span className="tag-chip mono" title="Overrides private machine default">
+                                  Open
+                                </span>
+                              )}
                               {m.rejected && <span className="reject-badge">{m.reject_msg || "Path unavailable"}</span>}
                             </div>
                             <div className="mount-path mono">{m.local_path}</div>
                           </div>
                           {node.is_owner && (
                             <div className="mount-actions">
+                              <button
+                                type="button"
+                                className="btn btn-sm"
+                                title="Configure visibility and per-user view/download restrictions"
+                                onClick={() => void openAccessModal(node, m)}
+                              >
+                                <Shield size={13} strokeWidth={1.6} />
+                                <span>Access</span>
+                              </button>
                               {m.kind !== "file" && (
                                 <label className="inline-switch" title="Let other members opt in to keep a local backup copy of this folder">
                                   <span>Allow mirroring</span>
@@ -469,6 +645,167 @@ export function ContributionView({ nodes, onRefresh }: ContributionViewProps) {
           })}
         </div>
       )}
+
+      <ModalDialog
+        open={Boolean(accessTarget && activeAccessNode)}
+        title={
+          activeAccessMount
+            ? `Access: ${activeAccessMount.name}`
+            : activeAccessNode
+              ? `Machine access: ${activeAccessNode.display_name}`
+              : "Access control"
+        }
+        onClose={() => setAccessTarget(null)}
+      >
+        {activeAccessNode && (
+          <div className="form-stack">
+            {accessError && (
+              <div className="alert-error" role="alert">
+                {accessError}
+              </div>
+            )}
+
+            <div className="field">
+              <label>{activeAccessMount ? "Folder visibility" : "Machine default visibility"}</label>
+              <span className="field-hint">
+                {activeAccessMount
+                  ? "Inherit uses your machine default. Private hides this folder from everyone except users you allow below."
+                  : "Open shares with all hub members unless restricted below. Private hides all folders unless explicitly allowed."}
+              </span>
+              {activeAccessMount ? (
+                <div className="seg-control" role="group" aria-label="Folder visibility">
+                  {(["inherit", "open", "private"] as const).map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      className="seg-btn"
+                      disabled={accessBusy}
+                      aria-pressed={(activeAccessMount.visibility ?? "inherit") === v}
+                      onClick={() => void handleSetMountVisibility(activeAccessNode.id, activeAccessMount.id, v)}
+                    >
+                      {v === "inherit"
+                        ? `Inherit (${activeAccessNode.visibility === "private" ? "Private" : "Open"})`
+                        : v === "open"
+                          ? "Open to hub"
+                          : "Private (allowlist)"}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="seg-control" role="group" aria-label="Machine visibility">
+                  {(["open", "private"] as const).map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      className="seg-btn"
+                      disabled={accessBusy}
+                      aria-pressed={(activeAccessNode.visibility ?? "open") === v}
+                      onClick={() => void handleSetNodeVisibility(activeAccessNode.id, v)}
+                    >
+                      {v === "open" ? "Open to hub" : "Private (allowlist only)"}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <form className="form-stack" onSubmit={handleSaveAccessRule}>
+              <div className="field">
+                <label htmlFor="access-rule-user">Per-user rule</label>
+                <span className="field-hint">
+                  Per-user rules override default visibility. Use &ldquo;No access&rdquo; to segregate a user, &ldquo;View only&rdquo; to block downloads, or &ldquo;Download only&rdquo; to block inline previews.
+                </span>
+                {members.length === 0 ? (
+                  <div className="mounts-empty">No other hub users registered yet.</div>
+                ) : (
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    <select
+                      id="access-rule-user"
+                      value={ruleUserId}
+                      onChange={(e) => setRuleUserId(e.target.value)}
+                      style={{ flex: "1 1 150px" }}
+                    >
+                      {members.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.display_name}
+                          {m.username ? ` (@${m.username})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      aria-label="Access level"
+                      value={ruleAccess}
+                      onChange={(e) => setRuleAccess(e.target.value as ShareAccessLevel)}
+                      style={{ flex: "1 1 170px" }}
+                    >
+                      <option value="none">No access (hide all)</option>
+                      <option value="view">View only (no download)</option>
+                      <option value="download">Download only (no preview)</option>
+                      <option value="all">Full access (view + download)</option>
+                    </select>
+                    <button type="submit" className="btn btn-primary" disabled={accessBusy || !ruleUserId}>
+                      Save rule
+                    </button>
+                  </div>
+                )}
+              </div>
+            </form>
+
+            <div className="field">
+              <label>Active user rules ({accessRules.length})</label>
+              {accessLoading ? (
+                <div className="mounts-empty">Loading rules…</div>
+              ) : accessRules.length === 0 ? (
+                <div className="mounts-empty">
+                  No per-user rules set here. All other hub members follow the visibility setting above.
+                </div>
+              ) : (
+                <ul className="mount-list">
+                  {accessRules.map((rule) => (
+                    <li key={rule.id} className="mount-item">
+                      <div className="mount-info">
+                        <div className="mount-name-row">
+                          <span className="mount-name">{rule.display_name || rule.user_id}</span>
+                          {rule.username && <span className="tag-chip mono">@{rule.username}</span>}
+                        </div>
+                      </div>
+                      <div className="mount-actions">
+                        <select
+                          aria-label={`Access level for ${rule.display_name || rule.user_id}`}
+                          value={rule.access}
+                          disabled={accessBusy}
+                          onChange={(e) => void handleUpdateRuleLevel(rule, e.target.value as ShareAccessLevel)}
+                        >
+                          <option value="none">No access (hide all)</option>
+                          <option value="view">View only (no download)</option>
+                          <option value="download">Download only (no preview)</option>
+                          <option value="all">Full access (view + download)</option>
+                        </select>
+                        <button
+                          type="button"
+                          className="icon-btn danger"
+                          title="Remove rule (revert to default)"
+                          aria-label={`Remove rule for ${rule.display_name || rule.user_id}`}
+                          disabled={accessBusy}
+                          onClick={() => void handleDeleteAccessRule(rule)}
+                        >
+                          <Trash2 size={14} strokeWidth={1.6} />
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="modal-actions">
+              <button type="button" className="btn btn-primary" onClick={() => setAccessTarget(null)}>
+                Done
+              </button>
+            </div>
+          </div>
+        )}
+      </ModalDialog>
 
       <ModalDialog open={enrollOpen} title="Connect a contributor machine" onClose={() => setEnrollOpen(false)}>
         {!enrollResult ? (

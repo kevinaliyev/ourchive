@@ -251,6 +251,8 @@ export function ExplorerView({
   const selectedMount = selectedMountId ? availableMounts.find((m) => m.id === selectedMountId) ?? null : null;
   const atArchiveRoot = !selectedMount;
   const isOwnHost = Boolean(selectedNode && selectedNode.owner_id === currentUser.id);
+  const canDownloadMount = isOwnHost || selectedMount?.access !== "view";
+  const canViewMount = isOwnHost || selectedMount?.access !== "download";
 
   const activeNodeId = selectedNode?.id ?? "";
   const activeNodeStatus = selectedNode?.status ?? "offline";
@@ -665,6 +667,12 @@ export function ExplorerView({
 
   function openPreview(entry: FileEntry) {
     if (!selectedNode || !selectedMount || entry.is_dir) return;
+    if (!canViewMount) {
+      if (canDownloadMount) {
+        void handleSmartDownload(selectedNode.id, selectedMount.id, entry.path, entry.name);
+      }
+      return;
+    }
     setPreviewTarget({
       nodeId: selectedNode.id,
       nodeName: selectedNode.display_name,
@@ -1067,7 +1075,7 @@ export function ExplorerView({
                 <span>Global search</span>
               </button>
 
-              {selectedNode.status === "online" && selectedMount.kind !== "file" && (
+              {selectedNode.status === "online" && selectedMount.kind !== "file" && canDownloadMount && (
                 <button
                   type="button"
                   className="btn"
@@ -1084,6 +1092,16 @@ export function ExplorerView({
                   <Download size={14} strokeWidth={1.6} />
                   <span>Folder .zip</span>
                 </button>
+              )}
+              {!isOwnHost && selectedMount.access === "view" && (
+                <span className="tag-chip mono" title="The owner restricted downloads on this folder">
+                  View only
+                </span>
+              )}
+              {!isOwnHost && selectedMount.access === "download" && (
+                <span className="tag-chip mono" title="The owner restricted inline previews on this folder">
+                  Download only
+                </span>
               )}
 
               {selectedNode.is_owner && selectedNode.status === "online" && selectedMount.kind !== "file" && (
@@ -1211,16 +1229,18 @@ export function ExplorerView({
                 <strong>{selectedPaths.length}</strong> selected
               </span>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() =>
-                    void handleSmartZip(selectedNode.id, selectedMount.id, "", "selection", selectedPaths)
-                  }
-                >
-                  <Download size={13} strokeWidth={1.6} />
-                  <span>Download .zip (P2P)</span>
-                </button>
+                {canDownloadMount && (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() =>
+                      void handleSmartZip(selectedNode.id, selectedMount.id, "", "selection", selectedPaths)
+                    }
+                  >
+                    <Download size={13} strokeWidth={1.6} />
+                    <span>Download .zip (P2P)</span>
+                  </button>
+                )}
                 {selectedNode.is_owner && (
                   <button type="button" className="btn btn-sm btn-danger" onClick={() => void handleBulkDelete()}>
                     <Trash2 size={13} strokeWidth={1.6} />
@@ -1386,7 +1406,7 @@ export function ExplorerView({
                                   >
                                     <FolderOpen size={14} strokeWidth={1.6} />
                                   </button>
-                                ) : (
+                                ) : canDownloadMount ? (
                                   <button
                                     type="button"
                                     className="icon-btn"
@@ -1396,8 +1416,8 @@ export function ExplorerView({
                                   >
                                     <Download size={14} strokeWidth={1.6} />
                                   </button>
-                                ))}
-                              {entry.is_dir && selectedNode.status === "online" && (
+                                ) : null)}
+                              {entry.is_dir && selectedNode.status === "online" && canDownloadMount && (
                                 <button
                                   type="button"
                                   className="icon-btn"
@@ -1525,7 +1545,7 @@ export function ExplorerView({
                             <FolderOpen size={13} strokeWidth={1.6} />
                             <span>Show on PC</span>
                           </button>
-                        ) : (
+                        ) : canDownloadMount ? (
                           <button
                             type="button"
                             className="btn btn-primary btn-sm"
@@ -1536,7 +1556,7 @@ export function ExplorerView({
                             <Download size={13} strokeWidth={1.6} />
                             <span>Download</span>
                           </button>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                     <div
@@ -1815,7 +1835,7 @@ export function ExplorerView({
             </div>
 
             <div className="inspector-foot">
-              {inspectedShare ? (
+              {canDownloadMount && (inspectedShare ? (
                 <button
                   type="button"
                   className="btn"
@@ -1843,21 +1863,23 @@ export function ExplorerView({
                   <Link2 size={14} strokeWidth={1.6} />
                   <span>{inspected.is_dir ? "Share ZIP link" : "Create share link"}</span>
                 </button>
-              )}
+              ))}
               {!inspected.is_dir && (
                 <>
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => {
-                      const targetEntry = inspected;
-                      drawerRef.current?.close();
-                      openPreview(targetEntry);
-                    }}
-                  >
-                    <Eye size={14} strokeWidth={1.6} />
-                    <span>Preview</span>
-                  </button>
+                  {canViewMount && (
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => {
+                        const targetEntry = inspected;
+                        drawerRef.current?.close();
+                        openPreview(targetEntry);
+                      }}
+                    >
+                      <Eye size={14} strokeWidth={1.6} />
+                      <span>Preview</span>
+                    </button>
+                  )}
                   {isOwnHost ? (
                     <button
                       type="button"
@@ -1867,7 +1889,7 @@ export function ExplorerView({
                       <FolderOpen size={14} strokeWidth={1.6} />
                       <span>Show on PC</span>
                     </button>
-                  ) : (
+                  ) : canDownloadMount ? (
                     <button
                       type="button"
                       className="btn btn-primary"
@@ -1876,7 +1898,7 @@ export function ExplorerView({
                       <Download size={14} strokeWidth={1.6} />
                       <span>Download</span>
                     </button>
-                  )}
+                  ) : null}
                 </>
               )}
               {selectedNode.is_owner && (
@@ -1960,7 +1982,8 @@ export function ExplorerView({
         )}
         hasPrev={previewIndex > 0}
         hasNext={previewIndex >= 0 && previewIndex < fileEntries.length - 1}
-        existingShareUrl={previewShare?.url}
+        canDownload={canDownloadMount}
+        existingShareUrl={canDownloadMount ? previewShare?.url : undefined}
         onPrev={previewIndex > 0 ? () => openPreview(fileEntries[previewIndex - 1]) : undefined}
         onNext={
           previewIndex >= 0 && previewIndex < fileEntries.length - 1
@@ -1982,7 +2005,7 @@ export function ExplorerView({
             : undefined
         }
         onShare={
-          previewTarget
+          previewTarget && canDownloadMount
             ? () => {
                 const t = previewTarget;
                 setPreviewTarget(null);

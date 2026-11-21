@@ -89,11 +89,32 @@ export interface Group {
   members: GroupMember[];
 }
 
+export interface MemberSummary {
+  id: string;
+  display_name: string;
+  username?: string;
+}
+
+export type ShareAccessLevel = "none" | "view" | "download" | "all";
+
+export interface ShareUserRule {
+  id: string;
+  node_id: string;
+  mount_id: string;
+  user_id: string;
+  display_name?: string;
+  username?: string;
+  access: ShareAccessLevel;
+  created_at: string;
+}
+
 export interface FolderMount {
   id: string;
   name: string;
   local_path: string;
   kind?: "folder" | "file";
+  visibility?: "inherit" | "open" | "private";
+  access?: "all" | "view" | "download";
   enabled: boolean;
   allow_sync?: boolean;
   total_bytes?: number;
@@ -143,6 +164,7 @@ export interface NodeView {
   arch: string;
   status: "online" | "offline" | "paused";
   paused: boolean;
+  visibility?: "open" | "private";
   upload_cap_mbps: number;
   allow_group_compute: boolean;
   compute: ComputeCapabilities;
@@ -396,13 +418,23 @@ export const api = {
     }),
   updateNodeConfig: (
     nodeId: string,
-    body: { display_name?: string; paused?: boolean; upload_cap_mbps?: number; allow_group_compute?: boolean },
+    body: {
+      display_name?: string;
+      paused?: boolean;
+      visibility?: "open" | "private";
+      upload_cap_mbps?: number;
+      allow_group_compute?: boolean;
+    },
   ) => request<{ ok: boolean }>(`/api/nodes/${nodeId}/config`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteNode: (nodeId: string) => request<{ ok: boolean }>(`/api/nodes/${nodeId}`, { method: "DELETE" }),
 
   addMount: (nodeId: string, body: { name: string; local_path: string; kind?: "folder" | "file" }) =>
     request<{ mount: FolderMount }>(`/api/nodes/${nodeId}/mounts`, { method: "POST", body: JSON.stringify(body) }),
-  updateMount: (nodeId: string, mountId: string, body: { name?: string; enabled?: boolean; allow_sync?: boolean }) =>
+  updateMount: (
+    nodeId: string,
+    mountId: string,
+    body: { name?: string; enabled?: boolean; allow_sync?: boolean; visibility?: "inherit" | "open" | "private" },
+  ) =>
     request<{ ok: boolean }>(`/api/nodes/${nodeId}/mounts/${mountId}`, {
       method: "PATCH",
       body: JSON.stringify(body),
@@ -628,6 +660,21 @@ export const api = {
     }),
   deleteMountACL: (id: string, nodeId?: string) =>
     request<{ ok: boolean }>(`/api/acls/${encodeURIComponent(id)}${nodeId ? `?node_id=${encodeURIComponent(nodeId)}` : ""}`, {
+      method: "DELETE",
+    }),
+  listMembers: () => request<{ members: MemberSummary[] }>("/api/members"),
+  listAccessRules: (nodeId: string, mountId?: string) => {
+    const q = new URLSearchParams({ node_id: nodeId });
+    if (mountId !== undefined) q.set("mount_id", mountId);
+    return request<{ rules: ShareUserRule[] }>(`/api/access-rules?${q.toString()}`);
+  },
+  upsertAccessRule: (body: { node_id: string; mount_id: string; user_id: string; access: ShareAccessLevel }) =>
+    request<{ rule: ShareUserRule }>("/api/access-rules", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  deleteAccessRule: (id: string) =>
+    request<{ ok: boolean }>(`/api/access-rules/${encodeURIComponent(id)}`, {
       method: "DELETE",
     }),
   convertOnAgent: async (nodeId: string, file: File, format: string, preset: string) => {

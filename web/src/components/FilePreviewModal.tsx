@@ -30,6 +30,7 @@ export interface PreviewTarget {
 interface FilePreviewModalProps {
   target: PreviewTarget | null;
   isOwnHost?: boolean;
+  canDownload?: boolean;
   hasPrev?: boolean;
   hasNext?: boolean;
   existingShareUrl?: string;
@@ -54,6 +55,7 @@ function isTextLike(mime: string, name: string): boolean {
 export function FilePreviewModal({
   target,
   isOwnHost,
+  canDownload = true,
   hasPrev,
   hasNext,
   existingShareUrl,
@@ -259,11 +261,13 @@ export function FilePreviewModal({
                     <span>Show on PC</span>
                   </button>
                 )
-              ) : (
+              ) : canDownload ? (
                 <a className="btn btn-primary btn-sm" href={downloadUrl}>
                   <Download size={13} strokeWidth={1.6} />
                   <span>Download</span>
                 </a>
+              ) : (
+                <span className="tag-chip mono">View only</span>
               )}
               <button
                 type="button"
@@ -284,6 +288,7 @@ export function FilePreviewModal({
                   key={fileUrl}
                   className="preview-video"
                   controls
+                  controlsList={canDownload ? undefined : "nodownload"}
                   playsInline
                   autoPlay={!prefersReducedMotion}
                   width={1280}
@@ -298,13 +303,14 @@ export function FilePreviewModal({
                   <div className="empty-title">Format not natively playable in this browser</div>
                   <p className="empty-copy">
                     Your browser can&apos;t decode <span className="mono">{target.entry.name}</span> directly (common
-                    for MKV, HEVC, or ProRes files). Download it or convert it to MP4/WebM once the Converter lands in
-                    Phase 5.
+                    for MKV, HEVC, or ProRes files).
                   </p>
-                  <a className="btn btn-primary" href={downloadUrl}>
-                    <Download size={14} strokeWidth={1.6} />
-                    <span>Download original</span>
-                  </a>
+                  {canDownload && (
+                    <a className="btn btn-primary" href={downloadUrl}>
+                      <Download size={14} strokeWidth={1.6} />
+                      <span>Download original</span>
+                    </a>
+                  )}
                 </div>
               ))}
 
@@ -317,6 +323,7 @@ export function FilePreviewModal({
                 <audio
                   key={fileUrl}
                   controls
+                  controlsList={canDownload ? undefined : "nodownload"}
                   autoPlay={!prefersReducedMotion}
                   preload="metadata"
                   src={fileUrl}
@@ -363,13 +370,15 @@ export function FilePreviewModal({
                 <FileIcon size={28} strokeWidth={1.4} className="muted-icon" />
                 <div className="empty-title">{target.entry.name}</div>
                 <p className="empty-copy">
-                  No inline preview for <span className="mono">{mime}</span>. Download it directly from{" "}
-                  {target.nodeName}.
+                  No inline preview for <span className="mono">{mime}</span>.
+                  {canDownload ? ` Download it directly from ${target.nodeName}.` : " Downloads are restricted on this folder."}
                 </p>
-                <a className="btn btn-primary" href={downloadUrl}>
-                  <Download size={14} strokeWidth={1.6} />
-                  <span>Download ({formatBytes(target.entry.size)})</span>
-                </a>
+                {canDownload && (
+                  <a className="btn btn-primary" href={downloadUrl}>
+                    <Download size={14} strokeWidth={1.6} />
+                    <span>Download ({formatBytes(target.entry.size)})</span>
+                  </a>
+                )}
               </div>
             )}
           </div>
