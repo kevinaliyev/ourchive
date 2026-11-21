@@ -9,7 +9,10 @@ import (
 	"strings"
 )
 
-const taskName = "OurchiveAgent"
+const (
+	taskName       = "OurchiveAgent"
+	winRunRegPath  = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+)
 
 // Install registers the agent binary to start silently on user login (no admin/UAC required).
 func Install(exePath string) (string, error) {
@@ -20,14 +23,14 @@ func Install(exePath string) (string, error) {
 
 	switch runtime.GOOS {
 	case "windows":
-		// User-level Scheduled Task on logon; no admin privileges needed.
-		tr := fmt.Sprintf(`"%s" run`, absExe)
-		cmd := exec.Command("schtasks", "/Create", "/F", "/SC", "ONLOGON", "/TN", taskName, "/TR", tr)
+		// User-level HKCU Run entry (no admin/UAC required; visible in Task Manager -> Startup apps).
+		val := fmt.Sprintf(`powershell.exe -NoProfile -WindowStyle Hidden -Command "& '%s' run"`, strings.ReplaceAll(absExe, `'`, `''`))
+		cmd := exec.Command("reg", "add", winRunRegPath, "/v", taskName, "/t", "REG_SZ", "/d", val, "/f")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			return "", fmt.Errorf("register scheduled task: %w (%s)", err, strings.TrimSpace(string(out)))
+			return "", fmt.Errorf("register Windows startup entry: %w (%s)", err, strings.TrimSpace(string(out)))
 		}
-		return fmt.Sprintf("Installed Windows logon task %q -> %s", taskName, absExe), nil
+		return fmt.Sprintf("Installed Windows user startup entry %q -> %s", taskName, absExe), nil
 
 	case "darwin":
 		home, err := os.UserHomeDir()
@@ -96,12 +99,14 @@ WantedBy=default.target
 func Uninstall() (string, error) {
 	switch runtime.GOOS {
 	case "windows":
-		cmd := exec.Command("schtasks", "/Delete", "/F", "/TN", taskName)
+		// Remove HKCU Run entry (and any legacy scheduled task if present).
+		_ = exec.Command("schtasks", "/Delete", "/F", "/TN", taskName).Run()
+		cmd := exec.Command("reg", "delete", winRunRegPath, "/v", taskName, "/f")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			return "", fmt.Errorf("remove scheduled task: %w (%s)", err, strings.TrimSpace(string(out)))
+			return "", fmt.Errorf("remove Windows startup entry: %w (%s)", err, strings.TrimSpace(string(out)))
 		}
-		return fmt.Sprintf("Removed Windows logon task %q", taskName), nil
+		return fmt.Sprintf("Removed Windows startup entry %q", taskName), nil
 
 	case "darwin":
 		home, err := os.UserHomeDir()
