@@ -1,61 +1,88 @@
-# Ourchive
+<p align="center">
+  <img src="docs/assets/ourchive-banner.svg" alt="Ourchive — Self-hosted pooled cloud storage, previewer, and GPU converter" width="100%" />
+</p>
 
-A semi-private, decentralized pooled cloud storage, rich file previewer, isolated embed link generator, and 3-tier GPU media converter platform.
-
-## Architecture
-- **Ourchive Hub** (`cmd/hub`): Single-binary Go control plane serving the built React Web UI, SQLite WAL database (auto-migrating), Argon2id + invite-only auth, tiered audit logs, `WSS + yamux` Agent tunnel broker, WebRTC P2P signaling, opt-in S3/Bunny.net edge storage, and isolated `s.` share subdomain embeds.
-- **Headless Share & Compute Agent** (`cmd/agent`): Cross-platform Go daemon behind home NAT with `os.OpenRoot` jailed folder/file serving, multi-hub configs under `$HOME/.config/ourchive/hubs/`, WebRTC P2P DataChannels, hardware-verified GPU `ffmpeg` conversion, user-level logon service installer, and verified self-updater.
-- **Web GUI** (`web/`): React + TypeScript + Vite interface.
+<p align="center">
+  <a href="docs/architecture.md">Architecture</a>
+  &nbsp;&middot;&nbsp;
+  <a href="docs/deployment.md">Deployment</a>
+  &nbsp;&middot;&nbsp;
+  <a href="docs/agent.md">Contributor Agent</a>
+  &nbsp;&middot;&nbsp;
+  <a href="docs/converter.md">Media &amp; Doc Converter</a>
+  &nbsp;&middot;&nbsp;
+  <a href="docs/security.md">Security Model</a>
+</p>
 
 ---
 
-## Local Development (Windows)
+**Ourchive** is a self-hosted, invite-only platform that lets a private group pool storage and GPU compute from their own Windows, macOS, and Linux machines behind home NAT.
 
+A single small VPS runs the **Hub** control plane (auth, search, permissions, thumbnails, WebRTC signaling, and isolated share links), while bulk downloads, uploads, and `.zip` exports stream **directly peer-to-peer** between browsers and contributor machines—keeping VPS egress near zero.
+
+---
+
+## Core Capabilities
+
+| Area | What Ourchive Provides |
+| :--- | :--- |
+| **Egress-Safe P2P Storage** | Direct WebRTC DataChannels (`get`, `put`, streaming `.zip`) between browser and contributor machines with automatic HTTP Range/ETag fallback behind strict NAT |
+| **Crash-Safe Transfers** | Browser **OPFS / IndexedDB** download staging and `.ourchive.part` atomic uploads with ETag validation and SHA-256 verification that survive dropped Wi-Fi or power loss |
+| **Owner-Sovereign Agent** | Single-binary cross-platform daemon (`Windows`, `macOS`, `Linux`) with `os.OpenRoot` jailing, `--read-only` / `--allow-dir` guards, multi-hub configs, logon service, and signed auto-updates |
+| **Rich Previewer & Share Links** | Hub-cached WebP thumbnails (browse even when nodes are offline), global search, rename/multi-select, and an isolated `s.yourdomain.com` subdomain for Discord/web embeds |
+| **3-Tier Media & Doc Converter** | Full `vert.sh`-parity video/audio/image conversion via discrete GPU `ffmpeg`, plus LibreOffice/Pandoc/pure-Go and browser-local conversion for PDF, DOCX, ODT, EPUB, RTF, CSV, JSON, XML, YAML |
+| **Invite-Only Auth & ACLs** | Argon2id + invite lineage tree, **Passkeys (WebAuthn + Signal API)**, **OpenID Connect (OIDC PKCE)**, per-mount group ACLs, real-time SSE, and tiered audit logs |
+
+---
+
+## How Transfers Avoid VPS Egress
+
+```mermaid
+flowchart LR
+    Browser["Web Client<br/>OPFS / IDB Cache"]
+    Hub["Ourchive Hub (VPS)<br/>Auth · SQLite WAL · ~2 KB SDP"]
+    Agent["Contributor Agent (Home PC)<br/>os.OpenRoot · GPU ffmpeg"]
+    Share["s.yourdomain.com<br/>Isolated Public Embeds"]
+
+    Browser <-->|"HTTPS / SSE / ~2 KB SDP"| Hub
+    Agent -->|"Outbound WSS + yamux"| Hub
+    Browser <==>|"Direct WebRTC P2P<br/>0 VPS Egress (get / put / zip)"| Agent
+    Share -.->|"Optional S3 / R2 / Bunny.net"| Hub
+```
+
+Because the VPS only coordinates metadata, thumbnails, and ~2 KB WebRTC handshakes, a **2 vCPU / 2 GB RAM** micro-VPS comfortably supports **100+ users**. See [docs/architecture.md](docs/architecture.md) and [docs/deployment.md](docs/deployment.md) for sizing details.
+
+---
+
+## Quickstart
+
+### 1. Local Development (Windows)
 ```powershell
 .\dev.ps1 -Agent
 ```
-
 - Hub API & static UI: `http://localhost:8080`
 - Vite dev server (HMR): `http://localhost:5173`
 - Isolated share subdomain: `http://s.localhost:8080/<slug>`
 
----
+### 2. Production VPS (Docker Compose + Caddy)
+Point `archive.yourdomain.com` and `s.yourdomain.com` to your VPS, then:
 
-## VPS Production Deployment (Docker + Caddy)
-
-1. Point two DNS A/AAAA records to your VPS:
-   - `archive.yourdomain.com` (main app & API)
-   - `s.yourdomain.com` (isolated share embeds — zero cookie overlap)
-2. Clone the repo and configure `.env`:
-   ```bash
-   cp .env.example .env
-   # Edit OURCHIVE_APP_DOMAIN and OURCHIVE_SHARE_DOMAIN
-   ```
-3. Build and start (Caddy automatically provisions Let's Encrypt HTTPS certificates):
-   ```bash
-   docker compose up -d --build
-   ```
-
-### Updating After a Git Push (Zero DB Loss)
-Your SQLite database (`./data/ourchive.db`) and thumbnail cache (`./data/thumbs/`) live on the host outside the container, and migrations run automatically on startup:
 ```bash
-git pull
+cp .env.example .env
+# Set OURCHIVE_APP_DOMAIN and OURCHIVE_SHARE_DOMAIN in .env
 docker compose up -d --build
 ```
 
-### Database Backup
+Caddy automatically provisions Let's Encrypt HTTPS certificates. Your SQLite database (`./data/ourchive.db`) and thumbnail cache (`./data/thumbs/`) persist on the host across updates:
+
 ```bash
-cp data/ourchive.db data/ourchive-backup-$(date +%F).db
+git pull && docker compose up -d --build
 ```
 
-For bare-metal Linux without Docker, see [deploy/ourchive-hub.service](deploy/ourchive-hub.service) and [deploy/Caddyfile](deploy/Caddyfile).
+For bare-metal Linux (`systemd` + Caddy), environment variables, backups, and S3/R2/Bunny.net Edge Storage, see [docs/deployment.md](docs/deployment.md).
 
----
-
-## Contributor Agent Setup
-
-### Option A — One-Paste Install (No Go Required)
-Replace `<OWNER>/<REPO>`, `<HUB_URL>`, and `<TOKEN>` (from **Contribution settings → Connect a machine**):
+### 3. Connect a Contributor Machine (No Go Required)
+Generate an enrollment token in **Contribution settings → Connect a machine**, then replace `OWNER/REPO`, `HUB`, and `TOKEN`:
 
 **Windows (PowerShell):**
 ```powershell
@@ -75,33 +102,77 @@ REPO="OWNER/REPO" HUB="https://archive.yourdomain.com" TOK="TOKEN" bash -c '
   "$BIN" service install
 '
 ```
-*(Add `--read-only` to `enroll` if you want the Agent to locally block all remote uploads, folder creation, and deletes.)*
 
-### Option B — Manual CLI Steps
-1. Generate an enrollment token in **Contribution settings → Connect a machine**.
-2. Enroll your machine (configs are stored per-Hub in `$HOME/.config/ourchive/hubs/`):
-   ```bash
-   ourchive-agent enroll --hub https://archive.yourdomain.com --token <TOKEN>
-   ```
-   Optional flags: `--read-only` (blocks all remote writes/deletes at the Agent), `--allow-dir <path>` (repeatable local whitelist).
-3. Install silent auto-start on login (no admin/UAC required):
-   ```bash
-   ourchive-agent service install
-   ```
-4. Opt into silent signed auto-updates (optional):
-   ```bash
-   ourchive-agent update --url https://api.github.com/repos/<owner>/<repo>/releases/latest --enable-auto
-   ```
-5. List enrolled hubs or run in the foreground:
-   ```bash
-   ourchive-agent list
-   ourchive-agent run
-   ```
+Add `--read-only` to `enroll` to enforce local read-only protection on the contributor machine. Full CLI reference in [docs/agent.md](docs/agent.md).
 
 ---
 
-## Building Cross-Platform Agent Binaries
+## Documentation
 
+| Guide | Contents |
+| :--- | :--- |
+| [Architecture](docs/architecture.md) | Topology, `WSS + yamux` control plane, WebRTC P2P DataChannels, OPFS/IDB & `.ourchive.part` crash-safe transfers, SSE, migrations |
+| [Deployment](docs/deployment.md) | VPS sizing, DNS, Docker Compose + Caddy, bare-metal `systemd`, environment variables, backups, Edge Storage, relay guardrails |
+| [Contributor Agent](docs/agent.md) | Windows/macOS/Linux installation, CLI flags, multi-hub configs, `os.OpenRoot` confinement, logon service, signed auto-updates |
+| [Media & Doc Converter](docs/converter.md) | 3-tier routing, GPU hardware detection (AMD/NVIDIA/Intel/Apple), full `vert.sh`-parity + document format matrix |
+| [Security Model](docs/security.md) | Owner sovereignty invariants, Argon2id + invites, Passkeys (WebAuthn + Signal API), OIDC PKCE, per-mount group ACLs, audit logs |
+
+---
+
+## Project Layout
+
+```text
+ourchive/
+├── cmd/
+│   ├── hub/                        # Control-plane HTTP server & router modules
+│   │   ├── main.go                 # Startup, hubApp wiring, middleware, SPA/share routing
+│   │   ├── routes_auth.go          # Auth, Passkeys (WebAuthn), OIDC, invites, users/groups, audit
+│   │   ├── routes_nodes.go         # Nodes, mounts, per-mount ACLs, parity sync, agent tunnel
+│   │   ├── routes_vfs.go           # VFS proxy, WebP thumbnails, tags, WebRTC SDP signaling
+│   │   ├── routes_shares.go        # Share links API & sticky broadcasts
+│   │   ├── routes_compute.go       # 3-tier converter GPU compute proxy & job history
+│   │   └── routes_system.go        # SSE stream (/api/events), health, Hub policy & settings
+│   └── agent/
+│       └── main.go                 # Cross-platform daemon, CLI, multi-hub loop, GPU probe
+├── internal/
+│   ├── audit/                      # Tiered audit logging
+│   ├── auth/                       # Sessions, Argon2id, invites, ACLs, WebAuthn, OIDC
+│   ├── compute/                    # Hardware-accelerated ffmpeg + document/data converter
+│   ├── db/                         # SQLite WAL loader & embedded migrations (001–009)
+│   ├── events/                     # Real-time SSE pub/sub broker
+│   ├── service/                    # Zero-UAC logon service installer (Win/macOS/Linux)
+│   ├── settings/                   # Hub policy, relay caps, OIDC & Edge Storage config
+│   ├── shares/                     # Share links & isolated s. subdomain OpenGraph embeds
+│   ├── storage/                    # Optional S3 / Cloudflare R2 / Bunny.net edge offload
+│   ├── tunnel/                     # Ed25519-authenticated WSS + yamux tunnel broker
+│   ├── updater/                    # SHA-256 + Ed25519 verified binary self-updater
+│   └── vfs/                        # os.OpenRoot VFS, WebRTC P2P DataChannels, zip, thumbs, tags
+├── pkg/protocol/                   # Shared Hub <-> Agent wire structs
+├── web/src/                        # React 19 + TypeScript + Vite frontend
+│   ├── api.ts, p2p.ts, passkeys.ts, transferCache.ts, converter.ts
+│   ├── components/                 # Explorer, Converter, Previewer, Shares, Admin, Dev Console
+│   └── styles/                     # Warm Paper + Graphite tokens & layout styles
+├── deploy/                         # Caddyfile & systemd unit for bare-metal Linux
+├── scripts/                        # Cross-platform Agent release build scripts
+└── docs/                           # Product documentation & architectural assets
+```
+
+---
+
+## Building & Testing
+
+```bash
+# Run all Go unit & integration tests (auth, ACLs, VFS resume, converter, shares, tunnel, updater)
+go test -v ./...
+
+# Build Hub and Agent binaries
+go build ./...
+
+# Type-check and build the Web UI
+npm --prefix web run build
+```
+
+Cross-platform Agent release binaries:
 - **Windows**: `.\scripts\build-agent.ps1 -Version v0.3.0`
-- **Linux / macOS**: `./scripts/build-agent.sh v0.3.0`
-- **Automated GitHub Releases**: Push a tag (`git tag v0.3.0 && git push --tags`) to trigger `.github/workflows/release-agent.yml`.
+- **macOS / Linux**: `./scripts/build-agent.sh v0.3.0`
+- **GitHub Releases**: `git tag v0.3.0 && git push --tags` triggers [.github/workflows/release-agent.yml](.github/workflows/release-agent.yml).

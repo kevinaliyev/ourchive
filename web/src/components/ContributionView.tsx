@@ -25,6 +25,9 @@ export function ContributionView({ nodes, onRefresh }: ContributionViewProps) {
   const [machineName, setMachineName] = useState("");
   const [enrollResult, setEnrollResult] = useState<EnrollTokenResponse | null>(null);
   const [enrollBusy, setEnrollBusy] = useState(false);
+  const [installTab, setInstallTab] = useState<"windows" | "unix" | "source">(() =>
+    typeof navigator !== "undefined" && /windows/i.test(navigator.userAgent) ? "windows" : "unix"
+  );
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -364,7 +367,7 @@ export function ContributionView({ nodes, onRefresh }: ContributionViewProps) {
                                 aria-label={`Remove ${m.name}`}
                                 onClick={() => handleDeleteMount(node.id, m.id)}
                               >
-                                <Trash2 size={14} strokeWidth={1.5} />
+                                <Trash2 size={15} strokeWidth={1.6} />
                               </button>
                             </div>
                           )}
@@ -411,7 +414,7 @@ export function ContributionView({ nodes, onRefresh }: ContributionViewProps) {
                                 onClick={() => handlePick(node, "folder")}
                                 title="Reference a local folder without copying"
                               >
-                                <FolderOpen size={14} strokeWidth={1.6} />
+                                <FolderOpen size={15} strokeWidth={1.6} />
                                 <span>Folder…</span>
                               </button>
                               <button
@@ -421,14 +424,14 @@ export function ContributionView({ nodes, onRefresh }: ContributionViewProps) {
                                 onClick={() => handlePick(node, "file")}
                                 title="Reference a single local file without copying"
                               >
-                                <FilePlus2 size={14} strokeWidth={1.6} />
+                                <FilePlus2 size={15} strokeWidth={1.6} />
                                 <span>File…</span>
                               </button>
                             </>
                           )}
                         </div>
                         <button type="submit" className="btn">
-                          <FolderPlus size={14} strokeWidth={1.6} />
+                          <FolderPlus size={15} strokeWidth={1.6} />
                           <span>Add</span>
                         </button>
                       </form>
@@ -492,44 +495,104 @@ export function ContributionView({ nodes, onRefresh }: ContributionViewProps) {
         ) : (
           <div className="form-stack">
             <p className="page-sub" style={{ marginTop: 0 }}>
-              Run step 1 once to register this machine&apos;s cryptographic identity, then run step 2 to start the
-              headless background agent. Token expires in 15 minutes.
+              Paste this command into your terminal to install, enroll, and start the background agent. Token expires
+              in 15 minutes.
             </p>
 
-            <div className="code-block">
-              <div className="code-head">
-                <span>1. Enroll machine</span>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+              <div className="seg-control" role="group" aria-label="Install platform">
                 <button
                   type="button"
-                  className="btn"
-                  onClick={() => copyText("enroll", enrollResult.command)}
+                  className="seg-btn"
+                  aria-pressed={installTab === "windows"}
+                  onClick={() => setInstallTab("windows")}
                 >
-                  {copiedKey === "enroll" ? <Check size={14} /> : <Copy size={14} />}
-                  <span>{copiedKey === "enroll" ? "Copied" : "Copy"}</span>
+                  Windows (PowerShell)
+                </button>
+                <button
+                  type="button"
+                  className="seg-btn"
+                  aria-pressed={installTab === "unix"}
+                  onClick={() => setInstallTab("unix")}
+                >
+                  macOS / Linux
+                </button>
+                <button
+                  type="button"
+                  className="seg-btn"
+                  aria-pressed={installTab === "source"}
+                  onClick={() => setInstallTab("source")}
+                >
+                  From source
                 </button>
               </div>
-              <pre className="mono">{enrollResult.command}</pre>
+              <span className="tag-chip mono">
+                {enrollResult.binary_source === "official" ? "Signed release" : "Served by this Hub"}
+              </span>
             </div>
 
-            <div className="code-block">
-              <div className="code-head">
-                <span>2. Start headless agent</span>
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={() => copyText("run", "go run ./cmd/agent run --config agent.json")}
-                >
-                  {copiedKey === "run" ? <Check size={14} /> : <Copy size={14} />}
-                  <span>{copiedKey === "run" ? "Copied" : "Copy"}</span>
-                </button>
+            {installTab !== "source" ? (
+              <div className="code-block">
+                <div className="code-head">
+                  <span>{installTab === "windows" ? "PowerShell (Windows)" : "Terminal (macOS / Linux)"}</span>
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() =>
+                      copyText(
+                        "install",
+                        (installTab === "windows" ? enrollResult.install_windows : enrollResult.install_unix) ||
+                          enrollResult.command
+                      )
+                    }
+                  >
+                    {copiedKey === "install" ? <Check size={14} /> : <Copy size={14} />}
+                    <span>{copiedKey === "install" ? "Copied" : "Copy"}</span>
+                  </button>
+                </div>
+                <pre className="mono" style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                  {(installTab === "windows" ? enrollResult.install_windows : enrollResult.install_unix) ||
+                    enrollResult.command}
+                </pre>
               </div>
-              <pre className="mono">go run ./cmd/agent run --config agent.json</pre>
-            </div>
+            ) : (
+              <>
+                <div className="code-block">
+                  <div className="code-head">
+                    <span>1. Enroll machine</span>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => copyText("enroll", enrollResult.command)}
+                    >
+                      {copiedKey === "enroll" ? <Check size={14} /> : <Copy size={14} />}
+                      <span>{copiedKey === "enroll" ? "Copied" : "Copy"}</span>
+                    </button>
+                  </div>
+                  <pre className="mono">{enrollResult.command}</pre>
+                </div>
+
+                <div className="code-block">
+                  <div className="code-head">
+                    <span>2. Start headless agent</span>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => copyText("run", "go run ./cmd/agent run")}
+                    >
+                      {copiedKey === "run" ? <Check size={14} /> : <Copy size={14} />}
+                      <span>{copiedKey === "run" ? "Copied" : "Copy"}</span>
+                    </button>
+                  </div>
+                  <pre className="mono">go run ./cmd/agent run</pre>
+                </div>
+              </>
+            )}
 
             <div className="modal-actions">
               <button
                 type="button"
-                className="btn btn-accent"
+                className="btn btn-primary"
                 onClick={() => {
                   setEnrollOpen(false);
                   void onRefresh();

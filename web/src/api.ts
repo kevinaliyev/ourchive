@@ -155,6 +155,11 @@ export interface EnrollTokenResponse {
   token: string;
   expires_at: string;
   command: string;
+  install_windows?: string;
+  install_unix?: string;
+  download_base_url?: string;
+  manifest_url?: string;
+  binary_source?: "hub" | "official";
 }
 
 export interface FileEntry {

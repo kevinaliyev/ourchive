@@ -6,7 +6,7 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-# Stage 2: Build Go Hub binary
+# Stage 2: Build Go Hub & cross-platform Agent binaries
 FROM golang:1.24-alpine AS go-builder
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -14,17 +14,25 @@ RUN go mod download
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 COPY pkg/ ./pkg/
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/ourchive-hub ./cmd/hub
+COPY scripts/ ./scripts/
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/ourchive-hub ./cmd/hub \
+    && mkdir -p /out/dist \
+    && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o /out/dist/ourchive-agent-windows-amd64.exe ./cmd/agent \
+    && CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o /out/dist/ourchive-agent-darwin-amd64 ./cmd/agent \
+    && CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o /out/dist/ourchive-agent-darwin-arm64 ./cmd/agent \
+    && CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o /out/dist/ourchive-agent-linux-amd64 ./cmd/agent \
+    && CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w" -o /out/dist/ourchive-agent-linux-arm64 ./cmd/agent
 
 # Stage 3: Minimal production runtime
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata \
     && addgroup -S ourchive && adduser -S -G ourchive ourchive \
-    && mkdir -p /data /app/web/dist \
+    && mkdir -p /data /app/web/dist /app/dist \
     && chown -R ourchive:ourchive /data /app
 
 WORKDIR /app
 COPY --from=go-builder /out/ourchive-hub /app/ourchive-hub
+COPY --from=go-builder /out/dist /app/dist
 COPY --from=web-builder /src/web/dist /app/web/dist
 
 USER ourchive
@@ -34,7 +42,8 @@ VOLUME ["/data"]
 ENV OURCHIVE_ADDR=:8080 \
     OURCHIVE_DB_PATH=/data/ourchive.db \
     OURCHIVE_THUMB_DIR=/data/thumbs \
-    OURCHIVE_WEB_DIR=/app/web/dist
+    OURCHIVE_WEB_DIR=/app/web/dist \
+    OURCHIVE_DIST_DIR=/app/dist
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -qO- http://127.0.0.1:8080/api/health >/dev/null || exit 1
