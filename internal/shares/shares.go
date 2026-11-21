@@ -1,6 +1,7 @@
 package shares
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -11,7 +12,11 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
+	"math"
 	"math/big"
 	"net"
 	"net/http"
@@ -40,7 +45,7 @@ var (
 
 	customSlugRe  = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{1,62}[a-zA-Z0-9]$`)
 	reservedSlugs = map[string]bool{
-		"robots.txt": true, "favicon.ico": true, "api": true, "health": true,
+		"robots.txt": true, "favicon.ico": true, "logo.png": true, "api": true, "health": true,
 		"raw": true, "oembed": true, "unlock": true, "zip": true,
 		"thumb": true, "admin": true, "login": true, "static": true,
 	}
@@ -468,6 +473,8 @@ func (s *Service) ShareHandler() http.Handler {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte("User-agent: *\nDisallow: /\n"))
 	})
+	mux.HandleFunc("GET /logo.png", s.handleBrandLogo)
+	mux.HandleFunc("GET /favicon.ico", s.handleBrandLogo)
 	mux.HandleFunc("GET /{slug}", s.handleSharePage)
 	mux.HandleFunc("POST /{slug}/unlock", s.handleUnlock)
 	mux.HandleFunc("GET /{slug}/oembed", s.handleOEmbed)
@@ -475,6 +482,94 @@ func (s *Service) ShareHandler() http.Handler {
 	mux.HandleFunc("GET /{slug}/raw", s.handleRaw)
 	mux.HandleFunc("HEAD /{slug}/raw", s.handleRaw)
 	return mux
+}
+
+var (
+	brandLogoOnce sync.Once
+	brandLogoPNG  []byte
+)
+
+// generateBrandLogoPNG renders the Web UI .brand-mark logo (warm light rounded square
+// with three dark horizontal bars) as a crisp antialiased PNG for favicons and embeds.
+func generateBrandLogoPNG(size int) []byte {
+	img := image.NewNRGBA(image.Rect(0, 0, size, size))
+	fg := color.NRGBA{R: 239, G: 233, B: 222, A: 255} // #efe9de (--text-primary)
+	bg := color.NRGBA{R: 22, G: 21, B: 19, A: 255}    // #161513 (--bg-canvas)
+
+	s := float64(size)
+	radius := s * 0.25 // 6px on 24px box
+
+	// 14/24 icon inset, matching .brand-mark (24px box, 14px SVG with viewBox 0 0 24 24, strokeWidth 2).
+	iconSize := s * (14.0 / 24.0)
+	iconOff := (s - iconSize) / 2.0
+	scale := iconSize / 24.0
+	halfStroke := 1.0 * scale // strokeWidth=2 -> half=1
+
+	type seg struct{ x1, x2, y float64 }
+	segs := []seg{
+		{4, 20, 7},
+		{4, 20, 12},
+		{4, 14, 17},
+	}
+
+	// Distance from point (px, py) to rounded rectangle [0, s] x [0, s] with corner radius.
+	rrectSDF := func(px, py float64) float64 {
+		cx := s / 2.0
+		cy := s / 2.0
+		qx := math.Abs(px-cx) - (cx - radius)
+		qy := math.Abs(py-cy) - (cy - radius)
+		outX := math.Max(qx, 0)
+		outY := math.Max(qy, 0)
+		return math.Hypot(outX, outY) + math.Min(math.Max(qx, qy), 0) - radius
+	}
+
+	// Distance from point (px, py) to horizontal capsule segment.
+	segSDF := func(px, py float64, sg seg) float64 {
+		ax := iconOff + sg.x1*scale
+		bx := iconOff + sg.x2*scale
+		sy := iconOff + sg.y*scale
+		clampedX := math.Max(ax, math.Min(bx, px))
+		return math.Hypot(px-clampedX, py-sy) - halfStroke
+	}
+
+	for y := 0; y < size; y++ {
+		py := float64(y) + 0.5
+		for x := 0; x < size; x++ {
+			px := float64(x) + 0.5
+			dBox := rrectSDF(px, py)
+			if dBox >= 0.75 {
+				continue
+			}
+			boxCov := math.Max(0, math.Min(1, 0.5-dBox))
+
+			dBar := 1e9
+			for _, sg := range segs {
+				if d := segSDF(px, py, sg); d < dBar {
+					dBar = d
+				}
+			}
+			barCov := math.Max(0, math.Min(1, 0.5-dBar))
+
+			r := uint8(math.Round(float64(fg.R)*(1-barCov) + float64(bg.R)*barCov))
+			g := uint8(math.Round(float64(fg.G)*(1-barCov) + float64(bg.G)*barCov))
+			b := uint8(math.Round(float64(fg.B)*(1-barCov) + float64(bg.B)*barCov))
+			a := uint8(math.Round(255.0 * boxCov))
+			img.SetNRGBA(x, y, color.NRGBA{R: r, G: g, B: b, A: a})
+		}
+	}
+
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
+}
+
+func (s *Service) handleBrandLogo(w http.ResponseWriter, r *http.Request) {
+	brandLogoOnce.Do(func() {
+		brandLogoPNG = generateBrandLogoPNG(128)
+	})
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(brandLogoPNG)
 }
 
 func (s *Service) allowIP(r *http.Request) bool {
@@ -546,6 +641,8 @@ func (s *Service) handleUnlock(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) handleSharePage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
 	slug := r.PathValue("slug")
@@ -568,13 +665,13 @@ func (s *Service) handleSharePage(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = w.Write([]byte(fmt.Sprintf(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow"><title>%s · Ourchive</title><style>%s</style></head>
-<body><main class="card"><h1>%s</h1><p class="sub">This shared item is password protected.</p>%s
+<meta name="robots" content="noindex,nofollow"><link rel="icon" type="image/png" href="/logo.png"><title>%s · ourchive</title><style>%s</style></head>
+<body><main class="card"><div class="brand">%s<span>ourchive</span></div><h1>%s</h1><p class="sub">This shared item is password protected.</p>%s
 <form method="post" action="/%s/unlock" class="pw-form">
 <input type="password" name="password" placeholder="Enter password" required autofocus>
 <button type="submit" class="btn-primary">Unlock</button>
 </form></main></body></html>`,
-			html.EscapeString(sl.Title), sharePageCSS, html.EscapeString(sl.Title), errBanner, html.EscapeString(slug))))
+			html.EscapeString(sl.Title), sharePageCSS, shareBrandMarkHTML, html.EscapeString(sl.Title), errBanner, html.EscapeString(slug))))
 		return
 	}
 
@@ -592,6 +689,7 @@ func (s *Service) handleSharePage(w http.ResponseWriter, r *http.Request) {
 	pageURL := origin + "/" + slug
 	rawURL := pageURL + "/raw"
 	thumbURL := pageURL + "/thumb.webp"
+	logoURL := origin + "/logo.png"
 	oembedURL := pageURL + "/oembed"
 
 	isVideo := strings.HasPrefix(sl.MimeType, "video/")
@@ -600,7 +698,9 @@ func (s *Service) handleSharePage(w http.ResponseWriter, r *http.Request) {
 	isOnline := sl.NodeStatus == protocol.NodeStatusOnline
 
 	var metaTags strings.Builder
-	fmt.Fprintf(&metaTags, `<meta property="og:site_name" content="Ourchive">`)
+	fmt.Fprintf(&metaTags, `<link rel="icon" type="image/png" href="%s">`, html.EscapeString(logoURL))
+	fmt.Fprintf(&metaTags, `<meta name="theme-color" content="#efe9de">`)
+	fmt.Fprintf(&metaTags, `<meta property="og:site_name" content="ourchive">`)
 	fmt.Fprintf(&metaTags, `<meta property="og:title" content="%s">`, html.EscapeString(sl.Title))
 	fmt.Fprintf(&metaTags, `<meta property="og:url" content="%s">`, html.EscapeString(pageURL))
 	fmt.Fprintf(&metaTags, `<link rel="alternate" type="application/json+oembed" href="%s" title="%s">`, html.EscapeString(oembedURL), html.EscapeString(sl.Title))
@@ -631,6 +731,7 @@ func (s *Service) handleSharePage(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&metaTags, `<meta name="twitter:card" content="summary_large_image">`)
 	} else {
 		fmt.Fprintf(&metaTags, `<meta property="og:type" content="website">`)
+		fmt.Fprintf(&metaTags, `<meta property="og:image" content="%s">`, html.EscapeString(logoURL))
 		fmt.Fprintf(&metaTags, `<meta name="twitter:card" content="summary">`)
 	}
 
@@ -662,9 +763,9 @@ func (s *Service) handleSharePage(w http.ResponseWriter, r *http.Request) {
 
 	_, _ = w.Write([]byte(fmt.Sprintf(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow">%s<title>%s · Ourchive</title><style>%s</style></head>
-<body><main class="wrap"><header class="head"><div><h1>%s</h1><p class="sub">%s</p></div>%s</header>%s</main></body></html>`,
-		metaTags.String(), html.EscapeString(sl.Title), sharePageCSS,
+<meta name="robots" content="noindex,nofollow">%s<title>%s · ourchive</title><style>%s</style></head>
+<body><main class="wrap"><div class="brand">%s<span>ourchive</span></div><header class="head"><div><h1>%s</h1><p class="sub">%s</p></div>%s</header>%s</main></body></html>`,
+		metaTags.String(), html.EscapeString(sl.Title), sharePageCSS, shareBrandMarkHTML,
 		html.EscapeString(sl.Title), html.EscapeString(desc), dlBtn, bodyHTML)))
 }
 
@@ -682,18 +783,23 @@ func (s *Service) handleOEmbed(w http.ResponseWriter, r *http.Request) {
 	}
 	origin := scheme + "://" + r.Host
 	typ := "link"
+	thumbURL := origin + "/logo.png"
 	if strings.HasPrefix(sl.MimeType, "video/") {
 		typ = "video"
+		thumbURL = origin + "/" + slug + "/thumb.webp"
 	} else if strings.HasPrefix(sl.MimeType, "image/") {
 		typ = "photo"
+		thumbURL = origin + "/" + slug + "/thumb.webp"
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"version":       "1.0",
 		"type":          typ,
 		"title":         sl.Title,
-		"provider_name": "Ourchive",
-		"thumbnail_url": origin + "/" + slug + "/thumb.webp",
+		"provider_name": "ourchive",
+		"thumbnail_url": thumbURL,
 	})
 }
 
@@ -710,7 +816,8 @@ func (s *Service) handleThumb(w http.ResponseWriter, r *http.Request) {
 	cacheFile := filepath.Join(s.thumbDir, hex.EncodeToString(sum[:16])+".webp")
 	if data, err := os.ReadFile(cacheFile); err == nil && len(data) > 0 {
 		w.Header().Set("Content-Type", "image/webp")
-		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
 		_, _ = w.Write(data)
 		return
 	}
@@ -747,7 +854,8 @@ func (s *Service) handleThumb(w http.ResponseWriter, r *http.Request) {
 		_ = os.WriteFile(cacheFile, body, 0o644)
 	}
 	w.Header().Set("Content-Type", ct)
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
 	_, _ = w.Write(body)
 }
 
@@ -870,6 +978,8 @@ func (s *Service) handleRaw(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
 	w.WriteHeader(resp.StatusCode)
 	if r.Method != http.MethodHead {
 		_, _ = io.Copy(w, resp.Body)
@@ -910,9 +1020,11 @@ func (s *Service) tryRelocate(ctx context.Context, client *http.Client, sl *Shar
 }
 
 func renderSimplePage(title, message string) string {
-	return fmt.Sprintf(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>%s · Ourchive</title><style>%s</style></head><body><main class="card"><h1>%s</h1><p class="sub">%s</p></main></body></html>`,
-		html.EscapeString(title), sharePageCSS, html.EscapeString(title), html.EscapeString(message))
+	return fmt.Sprintf(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><link rel="icon" type="image/png" href="/logo.png"><title>%s · ourchive</title><style>%s</style></head><body><main class="card"><div class="brand">%s<span>ourchive</span></div><h1>%s</h1><p class="sub">%s</p></main></body></html>`,
+		html.EscapeString(title), sharePageCSS, shareBrandMarkHTML, html.EscapeString(title), html.EscapeString(message))
 }
+
+const shareBrandMarkHTML = `<span class="brand-mark" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h10"/></svg></span>`
 
 func humanSize(b int64) string {
 	if b < 1024 {
@@ -934,6 +1046,8 @@ body{margin:0;min-height:100dvh;background:#161513;color:#efe9de;font-family:-ap
 .wrap{width:min(960px,100%);display:flex;flex-direction:column;gap:16px}
 .card{width:min(440px,100%);background:#1c1a18;border:1px solid rgba(239,233,222,.09);border-radius:12px;padding:24px}
 .head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.brand{display:inline-flex;align-items:center;gap:9px;font-size:14px;font-weight:500;letter-spacing:-.01em;color:#efe9de;margin-bottom:4px}
+.brand-mark{width:24px;height:24px;border-radius:6px;background:#efe9de;color:#161513;display:grid;place-items:center}
 h1{margin:0;font-size:20px;font-weight:500;letter-spacing:-.015em}
 .sub{margin:4px 0 0;color:#aaa398;font-size:13px}
 .stage{background:#100f0e;border:1px solid rgba(239,233,222,.08);border-radius:12px;overflow:hidden;display:grid;place-items:center;min-height:240px}
