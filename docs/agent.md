@@ -44,7 +44,8 @@ REPO="OWNER/REPO" HUB="https://archive.yourdomain.com" TOK="TOKEN" bash -c '
 | Command | Description |
 | :--- | :--- |
 | `ourchive-agent enroll --hub <url> --token <tok>` | Generates an Ed25519 keypair, enrolls with the Hub, and writes a per-Hub config file |
-| `ourchive-agent run` | Runs the daemon in the foreground for all enrolled Hubs concurrently |
+| `ourchive-agent run` | Runs the daemon in the foreground for all enrolled Hubs concurrently (`--max-retries N`, default `5`, `0` = unlimited) |
+| `ourchive-agent logs [-n 80]` | Prints the OS user log file path and recent agent log entries |
 | `ourchive-agent list` | Lists all enrolled Hubs and their config file paths |
 | `ourchive-agent probe` | Prints detected CPU, discrete GPU, and `ffmpeg` hardware encoder capabilities |
 | `ourchive-agent service install` | Installs a zero-UAC / user-level logon service (Registry Run key / launchd / systemd user unit) |
@@ -71,6 +72,20 @@ $HOME/.config/ourchive/
 ```
 
 Each Hub config contains its own Ed25519 private key, node ID, mount definitions, upload/download bandwidth caps, and read-only policy. Compromising or leaving one Hub never affects another.
+
+---
+
+## Agent Logs & Retry Behavior
+
+All `ourchive-agent run` output (connections, config pushes, and errors) is written to both stderr and a persistent per-user log file (auto-rotated at 5 MiB):
+
+- **Windows**: `%LOCALAPPDATA%\Ourchive\logs\agent.log`
+- **macOS**: `~/Library/Logs/Ourchive/agent.log`
+- **Linux**: `$XDG_STATE_HOME/ourchive/logs/agent.log` (default `~/.local/state/ourchive/logs/agent.log`)
+
+Run `ourchive-agent logs` to print the log path and recent entries.
+
+By default, each enrolled Hub stops retrying after **5 consecutive failed attempts** (`--max-retries 5`; pass `--max-retries 0` for unlimited retries). When running in an interactive terminal and all Hubs fail, the shell stays open so you can **retry (`r`)**, **print recent logs (`l`)**, or **exit (`q`)**.
 
 ---
 

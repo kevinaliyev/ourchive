@@ -88,6 +88,8 @@ func main() {
 		runUpdate(os.Args[2:])
 	case "service":
 		runService(os.Args[2:])
+	case "logs":
+		runLogs(os.Args[2:])
 	default:
 		printUsage()
 		os.Exit(1)
@@ -377,11 +379,28 @@ func runEnroll(args []string) {
 	fmt.Printf("Start the headless agent (connects to all enrolled hubs) with:\n  go run ./cmd/agent run\n")
 }
 
+type enrolledHub struct {
+	path    string
+	cfg     *AgentConfig
+	privKey ed25519.PrivateKey
+}
+
 func runDaemon(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "Optional single config file (default: connect to all hubs in $HOME/.config/ourchive/hubs/)")
 	forceReadOnly := fs.Bool("read-only", false, "Force read-only mode across all hubs (blocks all remote writes/deletes)")
+	maxRetries := fs.Int("max-retries", 5, "Maximum consecutive failed connection attempts per hub before stopping (0 = unlimited)")
+	logFile := fs.String("log-file", "", "Optional log file path (default: OS user logs folder)")
 	_ = fs.Parse(args)
+
+	logPath, closeLog, logErr := initAgentLogger(*logFile)
+	defer closeLog()
+	if logErr != nil {
+		log.Printf("warning: failed to initialize log file (%s): %v", logPath, logErr)
+		logPath = ""
+	} else {
+		log.Printf("ourchive-agent %s starting (log file: %s)", updater.Version, logPath)
+	}
 
 	var configPaths []string
 	if strings.TrimSpace(*cfgPath) != "" {
@@ -399,6 +418,31 @@ func runDaemon(args []string) {
 		log.Fatalf("no enrolled hubs found in %s (run `ourchive-agent enroll --hub <url> --token <tok>` first)", defaultHubsDir())
 	}
 
+	hubs := make([]enrolledHub, 0, len(configPaths))
+	for _, path := range configPaths {
+		cfg, err := loadConfig(path)
+		if err != nil {
+			log.Printf("skipping invalid config %s: %v", path, err)
+			continue
+		}
+		privBytes, err := base64.StdEncoding.DecodeString(cfg.PrivateKey)
+		if err != nil || len(privBytes) != ed25519.PrivateKeySize {
+			log.Printf("skipping config %s: invalid private_key", path)
+			continue
+		}
+		if *forceReadOnly {
+			cfg.ReadOnly = true
+		}
+		hubs = append(hubs, enrolledHub{
+			path:    path,
+			cfg:     cfg,
+			privKey: ed25519.PrivateKey(privBytes),
+		})
+	}
+	if len(hubs) == 0 {
+		log.Fatalf("no valid hub configurations found in %s", defaultHubsDir())
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -411,31 +455,34 @@ func runDaemon(args []string) {
 	}
 
 	computeCaps := probeCompute()
-	var wg sync.WaitGroup
-	for _, path := range configPaths {
-		cfg, err := loadConfig(path)
-		if err != nil {
-			log.Printf("skipping invalid config %s: %v", path, err)
-			continue
+	for {
+		var wg sync.WaitGroup
+		for _, h := range hubs {
+			wg.Add(1)
+			go func(eh enrolledHub) {
+				defer wg.Done()
+				runHubLoop(ctx, eh.path, eh.cfg, eh.privKey, computeCaps, *maxRetries)
+			}(h)
 		}
-		privBytes, err := base64.StdEncoding.DecodeString(cfg.PrivateKey)
-		if err != nil || len(privBytes) != ed25519.PrivateKeySize {
-			log.Printf("skipping config %s: invalid private_key", path)
-			continue
-		}
-		privKey := ed25519.PrivateKey(privBytes)
-		if *forceReadOnly {
-			cfg.ReadOnly = true
-		}
-		wg.Add(1)
-		go func(p string, c *AgentConfig, pk ed25519.PrivateKey) {
-			defer wg.Done()
-			runHubLoop(ctx, p, c, pk, computeCaps)
-		}(path, cfg, privKey)
-	}
 
-	wg.Wait()
-	log.Println("ourchive agent stopped")
+		wg.Wait()
+		if ctx.Err() != nil {
+			log.Println("ourchive agent stopped")
+			return
+		}
+
+		log.Printf("ERROR: all enrolled hubs stopped after reaching max retries (%d)", *maxRetries)
+		if isInteractiveTerminal(os.Stdin) {
+			if promptAfterFailure(logPath, os.Stdin, os.Stdout) {
+				continue
+			}
+			os.Exit(1)
+		}
+		if logPath != "" {
+			log.Printf("exiting after connection failures; inspect logs at %s", logPath)
+		}
+		os.Exit(1)
+	}
 }
 
 func runHubLoop(
@@ -444,27 +491,70 @@ func runHubLoop(
 	cfg *AgentConfig,
 	privKey ed25519.PrivateKey,
 	computeCaps protocol.ComputeCapabilities,
-) {
+	maxRetries int,
+) error {
 	var cfgMu sync.RWMutex
-	backoff := time.Second
+	return runHubLoopWithConnect(ctx, cfg.HubURL, maxRetries, time.Second, 15*time.Second, func(callCtx context.Context, onConnected func()) error {
+		return connectAndServe(callCtx, cfgPath, cfg, &cfgMu, privKey, computeCaps, onConnected)
+	})
+}
+
+func runHubLoopWithConnect(
+	ctx context.Context,
+	hubURL string,
+	maxRetries int,
+	initialBackoff time.Duration,
+	maxBackoff time.Duration,
+	connectFn func(ctx context.Context, onConnected func()) error,
+) error {
+	if initialBackoff <= 0 {
+		initialBackoff = time.Second
+	}
+	if maxBackoff < initialBackoff {
+		maxBackoff = initialBackoff
+	}
+
+	backoff := initialBackoff
+	consecutiveFailures := 0
 	for {
 		if ctx.Err() != nil {
-			return
+			return ctx.Err()
 		}
-		err := connectAndServe(ctx, cfgPath, cfg, &cfgMu, privKey, computeCaps)
+		connected := false
+		err := connectFn(ctx, func() {
+			connected = true
+			consecutiveFailures = 0
+			backoff = initialBackoff
+		})
 		if ctx.Err() != nil {
-			return
+			return ctx.Err()
 		}
-		log.Printf("[%s] tunnel disconnected (%v); reconnecting in %s...", cfg.HubURL, err, backoff)
+		if connected {
+			consecutiveFailures = 0
+			backoff = initialBackoff
+		}
+		consecutiveFailures++
+		if maxRetries > 0 && consecutiveFailures >= maxRetries {
+			log.Printf("[%s] ERROR: failed to connect after %d consecutive attempts (last error: %v); stopping retries for this hub",
+				hubURL, consecutiveFailures, err)
+			return err
+		}
+		if maxRetries > 0 {
+			log.Printf("[%s] ERROR: tunnel disconnected (attempt %d/%d): %v; reconnecting in %s...",
+				hubURL, consecutiveFailures, maxRetries, err, backoff)
+		} else {
+			log.Printf("[%s] ERROR: tunnel disconnected (%v); reconnecting in %s...",
+				hubURL, err, backoff)
+		}
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		case <-time.After(backoff):
 		}
-		if backoff < 15*time.Second {
+		if backoff < maxBackoff {
 			backoff *= 2
-			if backoff > 15*time.Second {
-				backoff = 15 * time.Second
+			if backoff > maxBackoff {
+				backoff = maxBackoff
 			}
 		}
 	}
@@ -477,6 +567,7 @@ func connectAndServe(
 	cfgMu *sync.RWMutex,
 	privKey ed25519.PrivateKey,
 	computeCaps protocol.ComputeCapabilities,
+	onConnected func(),
 ) error {
 	wsURL, err := buildTunnelURL(cfg.HubURL, cfg.NodeID, privKey)
 	if err != nil {
@@ -553,6 +644,9 @@ func connectAndServe(
 
 	if err := sendManifest(protocol.ControlHello); err != nil {
 		return fmt.Errorf("send hello: %w", err)
+	}
+	if onConnected != nil {
+		onConnected()
 	}
 
 	// Periodic heartbeat goroutine.
@@ -798,5 +892,5 @@ func runAutoUpdateLoop(ctx context.Context, exePath string, gs AgentGlobalSettin
 }
 
 func printUsage() {
-	fmt.Println("Usage: ourchive-agent <version|probe|list|enroll|run|update|service>")
+	fmt.Println("Usage: ourchive-agent <version|probe|list|enroll|run|logs|update|service>")
 }
