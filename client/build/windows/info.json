@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "0.4.0"
+	},
+	"info": {
+		"0409": {
+			"ProductVersion": "0.4.0",
+			"CompanyName": "Ourchive",
+			"FileDescription": "Ourchive desktop client",
+			"LegalCopyright": "(c) Ourchive contributors",
+			"ProductName": "Ourchive",
+			"Comments": "Peer-to-peer storage for invite-only groups"
+		}
+	}
+}
