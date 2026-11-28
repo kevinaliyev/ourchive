@@ -63,6 +63,8 @@ export interface ClientDownload {
 }
 
 export interface ClientState {
+  /** Increases on every change; used to long-poll for the next one. */
+  version: number;
   client_version: string;
   api_version: number;
   platform: { os: string; mobile: boolean; contributor: boolean; contributor_note?: string };
@@ -185,16 +187,23 @@ export async function initPlatform(): Promise<void> {
   } catch (err) {
     console.error("client bridge unavailable", err);
   }
-  const connect = () => {
-    const es = new EventSource("/_client/events");
-    es.addEventListener("state", (e) => setClientState(JSON.parse((e as MessageEvent<string>).data)));
-    es.onerror = () => {
-      es.close();
-      window.setTimeout(connect, 2000);
-    };
-  };
-  connect();
+  void followClientState();
   document.addEventListener("click", interceptLinkClick, true);
+}
+
+/**
+ * Long-polls `/_client/state?since=<version>` for changes. Not EventSource: WebView2 under Wails
+ * only delivers a response once the handler returns, so a stream would never arrive on Windows.
+ */
+async function followClientState(): Promise<never> {
+  for (;;) {
+    try {
+      const next = await bridge<ClientState>(`/_client/state?since=${clientState?.version ?? 0}`);
+      setClientState(next);
+    } catch {
+      await new Promise((r) => window.setTimeout(r, 2000));
+    }
+  }
 }
 
 function suggestedFilename(url: URL, anchor: HTMLAnchorElement): string {

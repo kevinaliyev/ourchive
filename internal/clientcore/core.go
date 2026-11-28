@@ -9,7 +9,7 @@
 //     the webview never holds hub cookies.
 //   - /_client/* is a small JSON bridge for things only the app can do: switch hubs, sign in
 //     through the system browser, save downloads with a native dialog, and drive the embedded
-//     contributor agent.
+//     contributor agent. The UI follows state changes by long-polling /_client/state.
 //
 // The GUI shell (cmd/client, Wails today) supplies a Shell for native dialogs, links and
 // notifications, and forwards ourchive:// deep links to HandleDeepLink.
@@ -20,8 +20,10 @@ import (
 	"errors"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ourchive/ourchive/internal/agentstatus"
@@ -107,9 +109,10 @@ type Core struct {
 	downloads   []*Download
 	nextDLID    int
 
-	subsMu sync.Mutex
-	subs   map[int]chan struct{}
-	nextID int
+	subsMu  sync.Mutex
+	subs    map[int]chan struct{}
+	nextID  int
+	version atomic.Uint64
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -152,6 +155,8 @@ type PendingEnrollmentView struct {
 
 // State is everything the UI and tray render.
 type State struct {
+	// Version increases on every change; pass it back as ?since= to wait for the next one.
+	Version           uint64                  `json:"version"`
 	ClientVersion     string                  `json:"client_version"`
 	APIVersion        int                     `json:"api_version"`
 	Platform          PlatformInfo            `json:"platform"`
@@ -244,6 +249,16 @@ func (c *Core) Middleware(next http.Handler) http.Handler {
 				writeJSONError(w, http.StatusForbidden, "cross-origin request blocked")
 				return
 			}
+			if wantsEventStream(r) && !canStream(w) {
+				// Some webviews (WebView2 under Wails) deliver a response only once the handler
+				// returns, so an endless event stream would just pile up in memory. Refuse it; the
+				// UI already falls back to polling when its EventSource fails.
+				writeJSONError(w, http.StatusNotImplemented, "live event streams are not supported in this webview")
+				return
+			}
+			if !canStream(w) {
+				capOpenRange(r, bufferedRangeCap)
+			}
 			c.proxy.ServeHTTP(w, r)
 		default:
 			next.ServeHTTP(w, r)
@@ -265,10 +280,66 @@ func sameOriginRequest(r *http.Request) bool {
 	}
 }
 
+// bufferedRangeCap is the largest byte range requested from a hub on behalf of a webview that
+// buffers whole responses. Media elements ask for "bytes=N-" and happily continue with the next
+// range after a 206, so capping keeps a video preview from being pulled into memory in one piece.
+const bufferedRangeCap = 8 << 20
+
+// capOpenRange rewrites an open-ended single range ("bytes=N-") to at most max bytes.
+func capOpenRange(r *http.Request, max int64) {
+	spec := strings.TrimSpace(r.Header.Get("Range"))
+	if !strings.HasPrefix(spec, "bytes=") || !strings.HasSuffix(spec, "-") || strings.Contains(spec, ",") {
+		return
+	}
+	start, err := strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(spec, "bytes="), "-"), 10, 64)
+	if err != nil || start < 0 {
+		return
+	}
+	r.Header.Set("Range", "bytes="+strconv.FormatInt(start, 10)+"-"+strconv.FormatInt(start+max-1, 10))
+}
+
+func wantsEventStream(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept"), "text/event-stream")
+}
+
+// canStream reports whether bytes written to w reach the page before the handler returns.
+func canStream(w http.ResponseWriter) bool {
+	_, ok := w.(http.Flusher)
+	return ok
+}
+
+// WaitForChange blocks until the state version exceeds since, ctx ends, or timeout passes, and
+// returns the current State either way. It is how the UI follows state on every platform,
+// including webviews that cannot stream responses.
+func (c *Core) WaitForChange(ctx context.Context, since uint64, timeout time.Duration) State {
+	updates, unsubscribe := c.Subscribe()
+	defer unsubscribe()
+	if c.version.Load() > since {
+		return c.Snapshot()
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return c.Snapshot()
+		case <-c.ctx.Done():
+			return c.Snapshot()
+		case <-timer.C:
+			return c.Snapshot()
+		case <-updates:
+			if c.version.Load() > since {
+				return c.Snapshot()
+			}
+		}
+	}
+}
+
 // Snapshot returns the current State.
 func (c *Core) Snapshot() State {
 	active, _ := c.hubs.Active()
 	st := State{
+		Version:       c.version.Load(),
 		ClientVersion: c.opts.Version,
 		APIVersion:    APIVersion,
 		Platform: PlatformInfo{
@@ -337,6 +408,7 @@ func (c *Core) Subscribe() (<-chan struct{}, func()) {
 }
 
 func (c *Core) changed() {
+	c.version.Add(1)
 	c.subsMu.Lock()
 	defer c.subsMu.Unlock()
 	for _, ch := range c.subs {

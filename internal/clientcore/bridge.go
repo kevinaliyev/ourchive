@@ -3,10 +3,9 @@ package clientcore
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -15,12 +14,27 @@ import (
 // cross-origin without a CORS preflight, which the bridge never grants.
 const bridgeHeader = "X-Ourchive-Client"
 
+// longPollTimeout bounds GET /_client/state?since=… so idle connections are recycled.
+const longPollTimeout = 25 * time.Second
+
 func (c *Core) bridgeMux() http.Handler {
 	mux := http.NewServeMux()
+	// GET /_client/state returns the state at once. With ?since=<version> it long-polls: it waits
+	// (up to 25s) for a newer version. Long-polling rather than server-sent events, because not
+	// every webview can stream a response (WebView2 under Wails buffers until the handler returns).
 	mux.HandleFunc("GET /_client/state", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, c.Snapshot())
+		since := r.URL.Query().Get("since")
+		if since == "" {
+			writeJSON(w, http.StatusOK, c.Snapshot())
+			return
+		}
+		n, err := strconv.ParseUint(since, 10, 64)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "since must be a state version")
+			return
+		}
+		writeJSON(w, http.StatusOK, c.WaitForChange(r.Context(), n, longPollTimeout))
 	})
-	mux.HandleFunc("GET /_client/events", c.serveEvents)
 
 	mux.HandleFunc("POST /_client/hubs", c.mutating(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -191,52 +205,6 @@ func (c *Core) mutating(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		next(w, r)
-	}
-}
-
-// serveEvents streams the full State as a "state" event after every change.
-func (c *Core) serveEvents(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		writeJSONError(w, http.StatusInternalServerError, "streaming unsupported")
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-
-	updates, unsubscribe := c.Subscribe()
-	defer unsubscribe()
-	send := func() bool {
-		data, _ := json.Marshal(c.Snapshot())
-		if _, err := fmt.Fprintf(w, "event: state\ndata: %s\n\n", data); err != nil {
-			return false
-		}
-		flusher.Flush()
-		return true
-	}
-	if !send() {
-		return
-	}
-	keepAlive := time.NewTicker(25 * time.Second)
-	defer keepAlive.Stop()
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-c.ctx.Done():
-			return
-		case <-keepAlive.C:
-			if _, err := io.WriteString(w, ": keep-alive\n\n"); err != nil {
-				return
-			}
-			flusher.Flush()
-		case <-updates:
-			if !send() {
-				return
-			}
-		}
 	}
 }
 

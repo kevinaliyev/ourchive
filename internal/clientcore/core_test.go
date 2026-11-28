@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -143,6 +144,9 @@ func newFakeHub(t *testing.T, apiVersion int) *fakeHub {
 		case <-h.release:
 		case <-r.Context().Done():
 		}
+	})
+	mux.HandleFunc("GET /api/vfs/video", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeContent(w, r, "clip.mp4", time.Time{}, strings.NewReader(strings.Repeat("v", 20<<20)))
 	})
 	mux.HandleFunc("GET /api/vfs/file", func(w http.ResponseWriter, r *http.Request) {
 		if ck, _ := r.Cookie(sessionCookieName); ck == nil || ck.Value == "" {
@@ -353,6 +357,7 @@ func TestProxyStreamsServerSentEvents(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, h.app.URL+"/api/events", nil)
+	req.Header.Set("Accept", "text/event-stream")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -561,45 +566,155 @@ func TestHubStorePersistsPrivately(t *testing.T) {
 	}
 }
 
-func TestStateEventsStream(t *testing.T) {
+func TestStateLongPoll(t *testing.T) {
 	hub := newFakeHub(t, APIVersion+1)
 	h := newHarness(t, false)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, h.app.URL+"/_client/events", nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	rd := bufio.NewReader(resp.Body)
-	next := func() State {
-		for {
-			line, err := rd.ReadString('\n')
-			if err != nil {
-				t.Fatalf("read event: %v", err)
-			}
-			if strings.HasPrefix(line, "data: ") {
-				var st State
-				if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &st); err != nil {
-					t.Fatal(err)
-				}
-				return st
-			}
-		}
-	}
-	if first := next(); len(first.Hubs) != 0 {
+	_, data := h.do(t, http.MethodGet, "/_client/state", nil, nil)
+	var first State
+	_ = json.Unmarshal(data, &first)
+	if len(first.Hubs) != 0 {
 		t.Fatalf("expected empty initial state")
 	}
+
+	// A long-poll with the current version waits until something changes.
+	poll := func(since uint64) (State, error) {
+		resp, err := http.Get(fmt.Sprintf("%s/_client/state?since=%d", h.app.URL, since))
+		if err != nil {
+			return State{}, err
+		}
+		defer resp.Body.Close()
+		var st State
+		return st, json.NewDecoder(resp.Body).Decode(&st)
+	}
+	type result struct {
+		st  State
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		st, err := poll(first.Version)
+		done <- result{st, err}
+	}()
+	select {
+	case r := <-done:
+		t.Fatalf("long-poll returned before any change: %+v %v", r.st, r.err)
+	case <-time.After(100 * time.Millisecond):
+	}
 	h.addHub(t, hub.URL)
+	var woke State
+	select {
+	case r := <-done:
+		if r.err != nil || r.st.Version <= first.Version {
+			t.Fatalf("long-poll should return a newer version, got %+v (%v)", r.st, r.err)
+		}
+		woke = r.st
+	case <-time.After(3 * time.Second):
+		t.Fatal("long-poll did not wake on change")
+	}
+	// Following versions the way the UI does converges on the saved hub.
+	for len(woke.Hubs) == 0 {
+		next, err := poll(woke.Version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		woke = next
+	}
+
+	// The newer-API hub is flagged once its health check lands.
+	deadline := time.Now().Add(3 * time.Second)
 	for {
-		st := next()
-		if len(st.Hubs) == 1 && st.Hubs[0].Info != nil {
-			if st.Hubs[0].Info.Compatible || !strings.Contains(st.Hubs[0].Info.Error, "update the app") {
-				t.Fatalf("a newer hub API must be flagged, got %+v", st.Hubs[0].Info)
+		st := h.core.Snapshot()
+		if info := st.Hubs[0].Info; info != nil {
+			if info.Compatible || !strings.Contains(info.Error, "update the app") {
+				t.Fatalf("a newer hub API must be flagged, got %+v", info)
 			}
 			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("hub info never arrived")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if resp, _ := h.do(t, http.MethodGet, "/_client/state?since=abc", nil, nil); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad since must be rejected, got %d", resp.StatusCode)
+	}
+}
+
+// bufferedWriter hides http.Flusher, like Wails' WebView2 response writer, which delivers a
+// response only after the handler returns.
+type bufferedWriter struct{ http.ResponseWriter }
+
+func TestEventStreamsRefusedWhereWebviewCannotStream(t *testing.T) {
+	hub := newFakeHub(t, APIVersion)
+	h := newHarness(t, false)
+	h.addHub(t, hub.URL)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+	req.Header.Set("Accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	finished := make(chan struct{})
+	go func() {
+		h.core.Middleware(http.NotFoundHandler()).ServeHTTP(bufferedWriter{rec}, req)
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("an event stream through a non-streaming writer must not hang")
+	}
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("expected 501 so EventSource gives up and the UI polls, got %d", rec.Code)
+	}
+
+	// Ordinary API calls through the same kind of writer still work.
+	req = httptest.NewRequest(http.MethodGet, "/api/echo", nil)
+	rec = httptest.NewRecorder()
+	h.core.Middleware(http.NotFoundHandler()).ServeHTTP(bufferedWriter{rec}, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plain API call through a buffered writer failed: %d", rec.Code)
+	}
+}
+
+func TestOpenRangesAreChunkedWhereWebviewBuffers(t *testing.T) {
+	hub := newFakeHub(t, APIVersion)
+	h := newHarness(t, false)
+	h.addHub(t, hub.URL)
+
+	get := func(w http.ResponseWriter, rng string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/vfs/video", nil)
+		req.Header.Set("Range", rng)
+		rec := w.(*httptest.ResponseRecorder)
+		h.core.Middleware(http.NotFoundHandler()).ServeHTTP(w, req)
+		return rec
+	}
+
+	// Buffered (WebView2-like): "bytes=0-" of a 20 MiB file comes back as one 8 MiB chunk.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/vfs/video", nil)
+	req.Header.Set("Range", "bytes=0-")
+	h.core.Middleware(http.NotFoundHandler()).ServeHTTP(bufferedWriter{rec}, req)
+	if rec.Code != http.StatusPartialContent || rec.Body.Len() != bufferedRangeCap {
+		t.Fatalf("expected an 8 MiB 206 chunk, got %d with %d bytes", rec.Code, rec.Body.Len())
+	}
+	if cr := rec.Header().Get("Content-Range"); cr != fmt.Sprintf("bytes 0-%d/%d", bufferedRangeCap-1, 20<<20) {
+		t.Fatalf("unexpected Content-Range %q", cr)
+	}
+
+	// Streaming webviews pass the range through untouched.
+	rec = get(httptest.NewRecorder(), "bytes=0-")
+	if rec.Body.Len() != 20<<20 {
+		t.Fatalf("streaming writer should get the whole open range, got %d bytes", rec.Body.Len())
+	}
+
+	// Explicit and multi-part ranges are never rewritten.
+	for _, spec := range []string{"bytes=0-99", "bytes=-500", "bytes=0-1,5-9", "items=0-"} {
+		r := httptest.NewRequest(http.MethodGet, "/x", nil)
+		r.Header.Set("Range", spec)
+		capOpenRange(r, bufferedRangeCap)
+		if got := r.Header.Get("Range"); got != spec {
+			t.Fatalf("capOpenRange(%q) rewrote it to %q", spec, got)
 		}
 	}
 }

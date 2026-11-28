@@ -76,7 +76,8 @@ Both use the same per-hub configs in `~/.config/ourchive/hubs/`, so nothing need
     `~/.config/ourchive/client/state.json` (mode `0600`) and added to each request. `Set-Cookie`
     responses update that file instead of reaching the webview.
   - `/_client/*` is a small JSON bridge: saved hubs, switching, browser sign-in, native save
-    dialogs, agent retry and enrollment, plus a server-sent-events state stream.
+    dialogs, agent retry and enrollment. The UI follows changes by long-polling
+    `GET /_client/state?since=<version>`.
 - **`client/`** is a separate Go module, so the hub and the headless agent still build with
   `CGO_ENABLED=0` and no GUI toolkit. It wires `clientcore` to Wails v3 and holds no other logic.
   The tray's labels and icons live in `client/internal/trayui` so they can be tested without a GUI.
@@ -96,6 +97,18 @@ Both use the same per-hub configs in `~/.config/ourchive/hubs/`, so nothing need
 Components call `isClient`, `hubOrigin()` and `openExternal()` instead of reading
 `window.location` or the build mode. Client-only components live in
 `web/src/components/ClientChrome.tsx`.
+
+### Windows webview limitation
+
+On Windows, Wails (WebView2) delivers a response to the page only after the Go handler has
+finished, so responses can't stream there. Because of that:
+
+- The app follows its own state by long-polling instead of server-sent events.
+- The hub's live `/api/events` stream is refused with `501` on Windows, and the UI falls back to its
+  15-second refresh. macOS and Linux stream normally.
+- Video and audio previews are fetched in 8 MiB ranges (the proxy caps open-ended `Range`
+  requests), so a long video isn't pulled into memory at once. Images and PDFs load whole.
+  Downloads are unaffected: they go straight to disk from Go via the native save dialog.
 
 Because the app bundles its own copy of the UI, it can be older or newer than a hub it talks to.
 `/api/health` reports `api_version`. The app compares it with `clientcore.APIVersion` and shows a
