@@ -10,10 +10,12 @@ import (
 	"context"
 	"embed"
 	"flag"
+	"fmt"
 	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -38,20 +40,41 @@ const appID = "com.ourchive.client"
 // backgroundFlag is passed by the login item so the app starts in the tray.
 const backgroundFlag = "--background"
 
+// logFile is where this run's log goes; fatal errors point the user at it.
+var logFile string
+
+// fatalf records a startup failure and, on Windows (no console), shows it in a message box before
+// exiting, so the app never just vanishes.
+func fatalf(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	log.Print("fatal: " + msg)
+	showFatal(msg + "\n\nDetails: " + logFile)
+	os.Exit(1)
+}
+
 func main() {
 	background := flag.Bool(strings.TrimPrefix(backgroundFlag, "--"), false, "start hidden in the system tray")
 	flag.Parse()
 
 	logPath, closeLog, err := agentlog.Init(agentlog.Options{Name: "client.log"})
 	defer closeLog()
+	logFile = logPath
 	if err != nil {
 		log.Printf("warning: log file unavailable (%s): %v", logPath, err)
 	}
-	log.Printf("ourchive client %s starting", version)
+	log.Printf("ourchive client %s starting (args: %q)", version, os.Args[1:])
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("panic: %v\n%s", r, debug.Stack())
+			showFatal(fmt.Sprintf("Ourchive crashed: %v\n\nDetails: %s", r, logFile))
+			closeLog()
+			os.Exit(2)
+		}
+	}()
 
 	assets, err := fs.Sub(embedded, "frontend/dist")
 	if err != nil {
-		log.Fatalf("frontend assets: %v", err)
+		fatalf("frontend assets: %v", err)
 	}
 
 	shell := &wailsShell{}
@@ -68,7 +91,7 @@ func main() {
 		ContributorNote: contributor.note,
 	})
 	if err != nil {
-		log.Fatalf("client state: %v", err)
+		fatalf("could not load the app's saved state: %v", err)
 	}
 
 	notifier := notifications.New()
@@ -160,9 +183,9 @@ func main() {
 	contributor.run(context.Background())
 
 	if err := app.Run(); err != nil {
-		log.Printf("app exited with error: %v", err)
-		os.Exit(1)
+		fatalf("the app window could not start: %v", err)
 	}
+	log.Print("ourchive client exiting normally")
 }
 
 func isDeepLink(s string) bool {
