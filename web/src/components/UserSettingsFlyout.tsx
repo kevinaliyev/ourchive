@@ -13,6 +13,7 @@ import {
   syncAcceptedCredentials,
   syncCurrentUserDetails,
 } from "../passkeys";
+import { hubOrigin, isClient, openExternal } from "../platform";
 import { ModalDialog } from "./ModalDialog";
 
 interface UserSettingsFlyoutProps {
@@ -360,6 +361,15 @@ export function UserSettingsFlyout({
               </div>
             )}
           </div>
+
+          {isClient && (
+            <div className="user-flyout-meta" style={{ justifyContent: "space-between" }}>
+              <span>Passkeys belong to the hub&apos;s website. Add or remove them there.</span>
+              <button type="button" className="btn btn-sm" onClick={() => openExternal(hubOrigin())}>
+                Open in browser
+              </button>
+            </div>
+          )}
 
           {passkeys.length === 0 ? (
             <p className="inline-muted" style={{ margin: 0 }}>

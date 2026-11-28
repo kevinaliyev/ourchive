@@ -20,7 +20,6 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
-  Globe,
   Hash,
   LayoutGrid,
   Link2,
@@ -67,27 +66,6 @@ type BrowseMode = "nodes" | "trees";
 type ViewStyle = "table" | "grid" | "gallery";
 type TypeFilter = "all" | "folders" | "video" | "audio" | "images" | "docs";
 
-interface SavedHub {
-  name: string;
-  url: string;
-}
-
-const SAVED_HUBS_KEY = "ourchive-saved-hubs";
-
-function loadSavedHubs(): SavedHub[] {
-  try {
-    const raw = localStorage.getItem(SAVED_HUBS_KEY);
-    const parsed = raw ? (JSON.parse(raw) as SavedHub[]) : [];
-    const currentOrigin = window.location.origin;
-    const hasCurrent = parsed.some((h) => h.url.replace(/\/+$/, "") === currentOrigin);
-    if (!hasCurrent) {
-      return [{ name: window.location.host, url: currentOrigin }, ...parsed];
-    }
-    return parsed;
-  } catch {
-    return [{ name: window.location.host, url: window.location.origin }];
-  }
-}
 type SortBy = "name" | "newest" | "largest";
 
 export function ExplorerView({
@@ -99,44 +77,6 @@ export function ExplorerView({
   onGoToContribution,
 }: ExplorerViewProps) {
   const [mode, setMode] = useState<BrowseMode>("nodes");
-  const [savedHubs, setSavedHubs] = useState<SavedHub[]>(loadSavedHubs);
-  const [addHubOpen, setAddHubOpen] = useState(false);
-  const [newHubName, setNewHubName] = useState("");
-  const [newHubUrl, setNewHubUrl] = useState("");
-
-  function handleSaveHub(e: FormEvent) {
-    e.preventDefault();
-    const trimmed = newHubUrl.trim().replace(/\/+$/, "");
-    if (!trimmed) return;
-    let normalized = trimmed;
-    if (!/^https?:\/\//i.test(normalized)) {
-      normalized = "https://" + normalized;
-    }
-    let hostLabel = newHubName.trim();
-    if (!hostLabel) {
-      try {
-        hostLabel = new URL(normalized).host;
-      } catch {
-        hostLabel = normalized;
-      }
-    }
-    const next = [...savedHubs.filter((h) => h.url.replace(/\/+$/, "") !== normalized), { name: hostLabel, url: normalized }];
-    setSavedHubs(next);
-    try {
-      localStorage.setItem(SAVED_HUBS_KEY, JSON.stringify(next));
-    } catch {}
-    setNewHubName("");
-    setNewHubUrl("");
-    setAddHubOpen(false);
-  }
-
-  function handleRemoveHub(url: string) {
-    const next = savedHubs.filter((h) => h.url !== url);
-    setSavedHubs(next);
-    try {
-      localStorage.setItem(SAVED_HUBS_KEY, JSON.stringify(next));
-    } catch {}
-  }
   const [viewStyle, setViewStyle] = useState<ViewStyle>("table");
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
@@ -720,50 +660,6 @@ export function ExplorerView({
 
   return (
     <div className="section-stack">
-      {/* Segregated Hubs Bar */}
-      <div className="hub-strip" role="navigation" aria-label="Segregated Ourchive Hubs">
-        <span className="hub-strip-label">
-          <Globe size={13} strokeWidth={1.6} />
-          <span>Hubs</span>
-        </span>
-        <div className="pill-strip">
-          {savedHubs.map((h) => {
-            const isCurrent = h.url.replace(/\/+$/, "") === window.location.origin;
-            return (
-              <span key={h.url} className="hub-pill-wrap">
-                <a
-                  href={h.url}
-                  className="source-pill"
-                  aria-current={isCurrent ? "page" : undefined}
-                  aria-pressed={isCurrent}
-                  onClick={(e) => {
-                    if (isCurrent) e.preventDefault();
-                  }}
-                >
-                  <span className={`dot ${isCurrent ? "" : "paused"}`} />
-                  <span>{h.name}</span>
-                </a>
-                {!isCurrent && (
-                  <button
-                    type="button"
-                    className="hub-remove-btn"
-                    title={`Remove ${h.name}`}
-                    aria-label={`Remove hub ${h.name}`}
-                    onClick={() => handleRemoveHub(h.url)}
-                  >
-                    <X size={11} />
-                  </button>
-                )}
-              </span>
-            );
-          })}
-          <button type="button" className="btn btn-sm" onClick={() => setAddHubOpen(true)}>
-            <Plus size={13} strokeWidth={1.6} />
-            <span>Add hub</span>
-          </button>
-        </div>
-      </div>
-
       {/* Top Mode & Source Strip */}
       <div className="explorer-top">
         <div className="segmented" role="group" aria-label="Browse mode">
@@ -2031,43 +1927,6 @@ export function ExplorerView({
         onCreated={() => void onSharesChanged()}
         onClose={() => setShareTarget(null)}
       />
-
-      {/* Add Ourchive Hub Modal */}
-      <ModalDialog open={addHubOpen} title="Add Ourchive Hub" onClose={() => setAddHubOpen(false)}>
-        <form className="form-stack" onSubmit={handleSaveHub}>
-          <div className="field">
-            <label htmlFor="hub-url-input">Hub URL</label>
-            <span className="field-hint">Each Hub stays strictly segregated with its own login and mounts.</span>
-            <input
-              id="hub-url-input"
-              type="text"
-              required
-              className="mono"
-              placeholder="https://archive.friends.org"
-              value={newHubUrl}
-              onChange={(e) => setNewHubUrl(e.target.value)}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="hub-name-input">Label (optional)</label>
-            <input
-              id="hub-name-input"
-              type="text"
-              placeholder="e.g. Friends Archive"
-              value={newHubName}
-              onChange={(e) => setNewHubName(e.target.value)}
-            />
-          </div>
-          <div className="modal-actions">
-            <button type="button" className="btn" onClick={() => setAddHubOpen(false)}>
-              Cancel
-            </button>
-            <button type="submit" className="btn btn-primary">
-              Add hub
-            </button>
-          </div>
-        </form>
-      </ModalDialog>
 
       {/* Opt-In Parity Sync Subscription Modal */}
       <ModalDialog open={syncModalOpen} title="Opt in to local mirroring" onClose={() => setSyncModalOpen(false)}>

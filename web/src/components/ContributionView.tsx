@@ -5,6 +5,8 @@
 import { FormEvent, useState } from "react";
 import { Check, Copy, Cpu, FilePlus2, FolderOpen, FolderPlus, Lock, Microchip, Monitor, Plus, Shield, Trash2 } from "lucide-react";
 import { api, EnrollTokenResponse, FolderMount, formatMbps, MemberSummary, NodeView, ShareAccessLevel, ShareUserRule } from "../api";
+import { enrollDeepLink, isClient } from "../platform";
+import { ThisComputerCard } from "./ClientChrome";
 import { ModalDialog } from "./ModalDialog";
 
 function vendorClass(name?: string): "hw-amd" | "hw-intel" | "hw-nvidia" | "hw-unknown" {
@@ -260,6 +262,8 @@ export function ContributionView({ nodes, onRefresh }: ContributionViewProps) {
 
   return (
     <div className="section-stack">
+      {isClient && <ThisComputerCard onEnrolled={() => void onRefresh()} />}
+
       <div className="toolbar-row">
         <div className="toolbar-meta">
           <span>
@@ -839,6 +843,16 @@ export function ContributionView({ nodes, onRefresh }: ContributionViewProps) {
               Paste this command into your terminal to install, enroll, and start the background agent. Token expires
               in 15 minutes.
             </p>
+
+            {!isClient && (
+              <div className="user-flyout-meta" style={{ justifyContent: "space-between", flexWrap: "wrap" }}>
+                <span>Have the Ourchive desktop app on this computer? Connect it in one click instead.</span>
+                <a className="btn btn-sm" href={enrollDeepLink(enrollResult.token, machineName.trim() || undefined)}>
+                  <Monitor size={13} strokeWidth={1.6} />
+                  <span>Open in Ourchive app</span>
+                </a>
+              </div>
+            )}
 
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
               <div className="seg-control" role="group" aria-label="Install platform">

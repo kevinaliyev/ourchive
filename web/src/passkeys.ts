@@ -6,6 +6,7 @@
  *   passkey registration, and WebAuthn Signal API synchronization using server-provided `rpId`.
  */
 import "webauthn-polyfills";
+import { isClient } from "./platform";
 import { User } from "./api";
 
 export interface StoredPasskeyCredential {
@@ -37,7 +38,8 @@ export function isValidBase64Url(value: unknown): value is string {
 }
 
 export async function getPasskeyCapabilities(): Promise<PasskeyCapabilities> {
-  if (typeof window === "undefined" || typeof window.PublicKeyCredential === "undefined") {
+  // Passkeys are bound to the hub's web origin; the desktop app signs in through the browser instead.
+  if (isClient || typeof window === "undefined" || typeof window.PublicKeyCredential === "undefined") {
     return { supported: false, conditionalGet: false, platformAuthenticator: false };
   }
   try {

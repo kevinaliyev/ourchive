@@ -19,6 +19,7 @@ import {
   Users,
 } from "lucide-react";
 import { Announcement, AnnouncementKind, api, AuditEntry, formatDate, Group, InviteKey, PublicNetworkConfig, User } from "../api";
+import { hubOrigin } from "../platform";
 import { ModalDialog } from "./ModalDialog";
 import { SettingsView } from "./SettingsView";
 
@@ -471,7 +472,7 @@ export function UsersGroupsView({ currentUser, netConfig, onSettingsSaved, onAnn
               type="button"
               className="btn btn-primary"
               onClick={() =>
-                copyText("minted-url", `${window.location.origin}/?invite=${encodeURIComponent(mintedInvite.code!)}`)
+                copyText("minted-url", `${hubOrigin()}/?invite=${encodeURIComponent(mintedInvite.code!)}`)
               }
             >
               {copiedId === "minted-url" ? <Check size={14} /> : <Copy size={14} />}

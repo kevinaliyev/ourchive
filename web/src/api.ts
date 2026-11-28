@@ -352,6 +352,12 @@ export const api = {
     request<{ user: User }>("/api/auth/setup", { method: "POST", body: JSON.stringify(body) }),
   login: (body: { identifier: string; password: string }) =>
     request<{ user: User }>("/api/auth/login", { method: "POST", body: JSON.stringify(body) }),
+  /** Desktop-app browser sign-in: returns the ourchive:// link that hands a one-time code to the app. */
+  authorizeClient: (challenge: string, state: string) =>
+    request<{ redirect_url: string }>("/api/auth/client/authorize", {
+      method: "POST",
+      body: JSON.stringify({ challenge, state }),
+    }),
   registerWithInvite: (body: {
     invite_code: string;
     email?: string;

@@ -3,6 +3,8 @@ import { ArrowLeftRight, Folder, KeyRound, Link2, Monitor, Shield } from "lucide
 import { Announcement, api, AuthStatus, formatMbps, HealthPayload, NodeView, PublicNetworkConfig, ShareLink, User } from "./api";
 import { AdminDevConsole } from "./components/AdminDevConsole";
 import { AuthView } from "./components/AuthView";
+import { ClientAuthorizePrompt } from "./components/ClientAuthorizePrompt";
+import { HubSwitcher, useClientStickyMessages } from "./components/ClientChrome";
 import { ContributionView } from "./components/ContributionView";
 import { ConverterView } from "./components/ConverterView";
 import { ExplorerView } from "./components/ExplorerView";
@@ -10,6 +12,7 @@ import { SharesView } from "./components/SharesView";
 import { StickyBannerStack, StickyMessage } from "./components/StickyBannerStack";
 import { UserSettingsFlyout } from "./components/UserSettingsFlyout";
 import { UsersGroupsView } from "./components/UsersGroupsView";
+import { capturePendingClientAuth, hubHost, isClient } from "./platform";
 
 type Tab = "explorer" | "converter" | "shares" | "contribution" | "admin";
 
@@ -36,6 +39,9 @@ export function App() {
   const [netConfig, setNetConfig] = useState<PublicNetworkConfig | null>(null);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [devConsoleOpen, setDevConsoleOpen] = useState(false);
+  // Web build: the desktop app asked this hub to sign it in (see ClientAuthorizePrompt).
+  const [clientAuth, setClientAuth] = useState(capturePendingClientAuth);
+  const clientMessages = useClientStickyMessages();
   const [dismissedIds, setDismissedIds] = useState<string[]>(() => {
     try {
       const raw = localStorage.getItem("ourchive-dismissed-announcements");
@@ -138,7 +144,7 @@ export function App() {
 
   // Combine Host Admin broadcasts + contextual system notifications (Hub offline, HW accel off)
   const stickyMessages = useMemo<StickyMessage[]>(() => {
-    const out: StickyMessage[] = [];
+    const out: StickyMessage[] = clientMessages.filter((m) => !(m.dismissible && dismissedIds.includes(m.id)));
     if (auth?.user && !hub) {
       out.push({
         id: "sys-hub-offline",
@@ -176,7 +182,7 @@ export function App() {
       });
     }
     return out;
-  }, [auth?.user, hub, tab, nodes, announcements, dismissedIds]);
+  }, [auth?.user, hub, tab, nodes, announcements, dismissedIds, clientMessages]);
 
   async function handleLogout() {
     await api.logout();
@@ -219,8 +225,7 @@ export function App() {
   const totalDownBps = nodes.reduce((acc, n) => acc + (n.traffic?.download_bps ?? 0), 0);
   const onlineNodes = nodes.filter((n) => n.status === "online");
   const ownOnlineNodes = onlineNodes.filter((n) => n.is_owner);
-  const activeHubName =
-    hub?.hub_name || (typeof window !== "undefined" ? window.location.hostname : "Ourchive");
+  const activeHubName = hub?.hub_name || hubHost() || "Ourchive";
   const headerBandwidthTooltip = [
     `Combined live bandwidth across ${onlineNodes.length} connected ${onlineNodes.length === 1 ? "machine" : "machines"} on ${activeHubName} (↑ upload · ↓ download)`,
     ownOnlineNodes.length > 0
@@ -235,13 +240,16 @@ export function App() {
       <div className="shell">
         <header className="topnav">
           <div className="topnav-inner">
-            <div className="brand">
-              <span className="brand-mark" aria-hidden="true">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M4 7h16M4 12h16M4 17h10" />
-                </svg>
-              </span>
-              <span>ourchive</span>
+            <div className="brand-group">
+              <div className="brand">
+                <span className="brand-mark" aria-hidden="true">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M4 7h16M4 12h16M4 17h10" />
+                  </svg>
+                </span>
+                <span>ourchive</span>
+              </div>
+              {isClient && <HubSwitcher />}
             </div>
             <div className="segmented" role="group" aria-label="Color scheme">
               <button className="seg-btn" aria-pressed={scheme === "dark"} onClick={() => setScheme("dark")}>
@@ -257,6 +265,7 @@ export function App() {
           initialized={auth.initialized}
           identityMode={auth.auth_identity_mode ?? "email_or_username"}
           onAuthenticated={handleAuthenticated}
+          notice={clientAuth ? "Sign in to continue to the Ourchive desktop app." : undefined}
         />
       </div>
     );
@@ -266,13 +275,16 @@ export function App() {
     <div className="shell">
       <header className="topnav">
         <div className="topnav-inner">
-          <div className="brand">
-            <span className="brand-mark" aria-hidden="true">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M4 7h16M4 12h16M4 17h10" />
-              </svg>
-            </span>
-            <span>ourchive</span>
+          <div className="brand-group">
+            <div className="brand">
+              <span className="brand-mark" aria-hidden="true">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M4 7h16M4 12h16M4 17h10" />
+                </svg>
+              </span>
+              <span>ourchive</span>
+            </div>
+            {isClient && <HubSwitcher />}
           </div>
 
           <nav className="nav-links" aria-label="Primary">
@@ -317,6 +329,10 @@ export function App() {
       </header>
 
       <StickyBannerStack messages={stickyMessages} onDismiss={handleDismissBanner} />
+
+      {clientAuth && auth?.user && (
+        <ClientAuthorizePrompt user={auth.user} pending={clientAuth} onDone={() => setClientAuth(null)} />
+      )}
 
       {canUseDevConsole && auth?.user && (
         <AdminDevConsole

@@ -11,14 +11,18 @@ import {
   startConditionalPasskeyLogin,
   triggerButtonPasskeyLogin,
 } from "../passkeys";
+import { isClient } from "../platform";
+import { BrowserSignInButton } from "./ClientChrome";
 
 interface AuthViewProps {
   initialized: boolean;
   identityMode: AuthIdentityMode;
   onAuthenticated: (user: User) => void;
+  /** Extra context shown under the heading, e.g. when signing in for the desktop app. */
+  notice?: string;
 }
 
-export function AuthView({ initialized, identityMode, onAuthenticated }: AuthViewProps) {
+export function AuthView({ initialized, identityMode, onAuthenticated, notice }: AuthViewProps) {
   const [mode, setMode] = useState<"login" | "invite">(() => {
     try {
       const p = new URLSearchParams(window.location.search);
@@ -52,6 +56,7 @@ export function AuthView({ initialized, identityMode, onAuthenticated }: AuthVie
   const [passkeyBusy, setPasskeyBusy] = useState(false);
   const [passkeysAvailable, setPasskeysAvailable] = useState(false);
   const [oidcProviders, setOidcProviders] = useState<{ id: string; name: string }[]>([]);
+  const [hubHasPasskeys, setHubHasPasskeys] = useState(false);
   const abortConditionalRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -64,6 +69,7 @@ export function AuthView({ initialized, identityMode, onAuthenticated }: AuthVie
       ([srv, caps]) => {
         if (!active) return;
         setOidcProviders(srv.providers || []);
+        setHubHasPasskeys(Boolean(srv.passkeys_enabled));
         setPasskeysAvailable(Boolean(srv.passkeys_enabled && caps.supported));
       },
     );
@@ -179,6 +185,11 @@ export function AuthView({ initialized, identityMode, onAuthenticated }: AuthVie
               ? "Registration is invite-only. Enter your key to create an account."
               : "Use your email or username and password to access shared nodes."}
         </p>
+        {notice && (
+          <div className="user-flyout-meta" role="status" style={{ marginBottom: 16 }}>
+            {notice}
+          </div>
+        )}
 
         <form className="form-stack" onSubmit={handleSubmit}>
           {initialized && mode === "invite" && (
@@ -354,7 +365,12 @@ export function AuthView({ initialized, identityMode, onAuthenticated }: AuthVie
             </button>
           )}
 
-          {initialized && oidcProviders.length > 0 && (
+          {/* Passkeys and SSO only work on the hub's own website, so the app signs in through the browser. */}
+          {isClient && initialized && mode === "login" && (
+            <BrowserSignInButton hasSSO={hubHasPasskeys || oidcProviders.length > 0} />
+          )}
+
+          {!isClient && initialized && oidcProviders.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {oidcProviders.map((prov) => {
                 const href = `/api/auth/oidc/${encodeURIComponent(prov.id)}/login${
