@@ -1,0 +1,89 @@
+name: Build Ourchive App
+
+# Manual for now; tag client-v* to publish installers as a draft release.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "client-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Go tests (agent core, client core, handoff, hub)
+        run: go test -race ./internal/agentcore ./internal/agentstatus ./internal/agentlog ./internal/clientcore ./internal/handoff ./cmd/agent ./cmd/hub
+      - name: Type-check web UI
+        run: npm --prefix web ci && npm --prefix web exec -- tsc --noEmit
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: ourchive-windows-amd64
+          - os: macos-latest
+            artifact: ourchive-macos-arm64
+          - os: ubuntu-24.04
+            artifact: ourchive-linux-amd64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: client/go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Linux GUI dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
+      - name: Generate build assets if not committed
+        run: test -f build/Taskfile.yml || ./scripts/bootstrap-build-assets.sh
+      - name: Resolve Go modules
+        run: go mod tidy
+      - name: Stamp version
+        # The generated Wails Taskfiles hard-code -ldflags, so set the version from a source file.
+        env:
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('dev-{0}', github.sha) }}
+        run: printf 'package main\n\nfunc init() { version = "%s" }\n' "${VERSION#client-}" > version_release.go
+      - name: Package
+        run: wails3 task package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: client/bin/*
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/**/*

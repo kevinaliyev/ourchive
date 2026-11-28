@@ -30,7 +30,7 @@ import (
 //go:embed all:frontend/dist
 var embedded embed.FS
 
-// version is set at build time with -ldflags "-X main.version=v0.4.0".
+// version is stamped by CI (version_release.go) or with -ldflags "-X main.version=v0.4.0".
 var version = "dev"
 
 const appID = "com.ourchive.client"
