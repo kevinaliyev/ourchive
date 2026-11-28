@@ -67,6 +67,7 @@ func setupTestHub(t *testing.T) (*hubApp, http.Handler) {
 	app.registerVFSRoutes(mux)
 	app.registerShareRoutes(mux)
 	app.registerComputeRoutes(mux)
+	app.registerClientRoutes(mux)
 	return app, mux
 }
 

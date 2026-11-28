@@ -62,11 +62,12 @@ func (h *hubApp) registerSystemRoutes(appMux *http.ServeMux) {
 	// --- Health ---
 	appMux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, healthResponse{
-			Status:    "ok",
-			Version:   "0.3.0",
-			HubName:   h.hubName,
-			ShareHost: shareHost,
-			Time:      time.Now().UTC().Format(time.RFC3339),
+			Status:     "ok",
+			Version:    "0.3.0",
+			APIVersion: clientAPIVersion,
+			HubName:    h.hubName,
+			ShareHost:  shareHost,
+			Time:       time.Now().UTC().Format(time.RFC3339),
 		})
 	})
 

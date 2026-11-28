@@ -279,4 +279,3 @@ func buildTunnelURL(hubURL, nodeID string, priv ed25519.PrivateKey) (string, err
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }
-
