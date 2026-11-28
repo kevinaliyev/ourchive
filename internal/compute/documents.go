@@ -53,7 +53,7 @@ func ConvertDocument(ctx context.Context, inPath, outPath, inFormat, outFormat, 
 		(outFmt == "pdf" || outFmt == "docx" || outFmt == "odt" || outFmt == "html" || outFmt == "txt") {
 		if soffice, err := exec.LookPath("soffice"); err == nil {
 			outDir := filepath.Dir(outPath)
-			cmd := exec.CommandContext(ctx, soffice, "--headless", "--convert-to", outFmt, "--outdir", outDir, inPath)
+			cmd := command(ctx, soffice, "--headless", "--convert-to", outFmt, "--outdir", outDir, inPath)
 			if cmd.Run() == nil {
 				produced := filepath.Join(outDir, strings.TrimSuffix(filepath.Base(inPath), filepath.Ext(inPath))+"."+outFmt)
 				if _, statErr := os.Stat(produced); statErr == nil {
@@ -69,7 +69,7 @@ func ConvertDocument(ctx context.Context, inPath, outPath, inFormat, outFormat, 
 	// 2. Try Pandoc for rich document conversions if installed (skip pdf unless pdf engine is present).
 	if outFmt != "pdf" && outFmt != "csv" && outFmt != "json" && outFmt != "xml" && outFmt != "yaml" {
 		if pandoc, err := exec.LookPath("pandoc"); err == nil {
-			cmd := exec.CommandContext(ctx, pandoc, inPath, "-o", outPath)
+			cmd := command(ctx, pandoc, inPath, "-o", outPath)
 			if cmd.Run() == nil {
 				if _, statErr := os.Stat(outPath); statErr == nil {
 					return "pandoc", nil

@@ -107,7 +107,7 @@ Add-Type -TypeDefinition $code
 $picked = [ModernDialogPicker]::Pick("` + title + `")
 if ($picked) { [Console]::Out.Write($picked) }
 `
-		cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-STA", "-Command", script)
+		cmd := command(ctx, "powershell", "-NoProfile", "-STA", "-Command", script)
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		if err := cmd.Run(); err != nil {
@@ -124,7 +124,7 @@ if ($picked) { [Console]::Out.Write($picked) }
 		if foldersOnly {
 			osa = `POSIX path of (choose folder with prompt "Choose a folder to share with Ourchive")`
 		}
-		cmd := exec.CommandContext(ctx, "osascript", "-e", osa)
+		cmd := command(ctx, "osascript", "-e", osa)
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		if err := cmd.Run(); err != nil {
@@ -142,7 +142,7 @@ if ($picked) { [Console]::Out.Write($picked) }
 			if foldersOnly {
 				args = []string{"--file-selection", "--directory", "--title=Choose a folder to share with Ourchive"}
 			}
-			cmd := exec.CommandContext(ctx, zenity, args...)
+			cmd := command(ctx, zenity, args...)
 			var out bytes.Buffer
 			cmd.Stdout = &out
 			if err := cmd.Run(); err != nil {
