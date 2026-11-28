@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 
 	"github.com/ourchive/ourchive/internal/agentlog"
 	"github.com/ourchive/ourchive/internal/agentstatus"
@@ -61,14 +62,19 @@ func (t *tray) start() {
 
 	t.systray.SetMenu(t.menu)
 	t.systray.OnClick(func() { t.shell.ShowWindow() })
-	t.render(t.core.Snapshot())
+	t.render(t.core.Snapshot()) // before app.Run: Wails stores these and applies them at startup
 
-	updates, _ := t.core.Subscribe()
-	go func() {
-		for range updates {
-			t.render(t.core.Snapshot())
-		}
-	}()
+	// Follow state only once the app runs: tray and menu updates have to happen on the main
+	// thread, and InvokeSync is unavailable before app.Run.
+	t.app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+		updates, _ := t.core.Subscribe()
+		go func() {
+			for range updates {
+				st := t.core.Snapshot()
+				application.InvokeSync(func() { t.render(st) })
+			}
+		}()
+	})
 }
 
 func (t *tray) setStartAtLogin(on bool) {

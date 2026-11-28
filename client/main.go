@@ -169,9 +169,13 @@ func isDeepLink(s string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(s)), clientcore.DeepLinkScheme+"://")
 }
 
+// handleDeepLink runs off the calling thread: completing a sign-in calls the hub, and Wails may
+// deliver these callbacks on the UI thread.
 func handleDeepLink(core *clientcore.Core, shell *wailsShell, link string) {
-	if err := core.HandleDeepLink(link); err != nil {
-		log.Printf("deep link rejected: %v", err)
-		shell.Notify("Ourchive", err.Error())
-	}
+	go func() {
+		if err := core.HandleDeepLink(link); err != nil {
+			log.Printf("deep link rejected: %v", err)
+			shell.Notify("Ourchive", err.Error())
+		}
+	}()
 }
