@@ -168,6 +168,11 @@ machine* dialog has the same control. **Open Ourchive app** hands an `ourchive:/
 browser, which opens the app if the OS has it registered. If the page is still in front a moment
 later, the app probably isn't installed, so **Download for \<your OS\>** is highlighted.
 
+On Windows the app registers `ourchive://` for the current user (HKCU, no admin rights) each time it
+starts from a new location, so a built or unzipped copy works without the installer. The installer
+registers the same scheme; whichever copy started last handles the links. macOS and Linux get the
+scheme from the app bundle and the `.desktop` file instead.
+
 Two limits come from the browser, not from Ourchive: a web page can't tell whether an app is
 installed (it only guesses from whether the page lost focus), and it can't run a downloaded file, so
 the user runs the installer themselves. Unsigned builds also trigger SmartScreen on Windows and

@@ -63,6 +63,7 @@ func main() {
 		log.Printf("warning: log file unavailable (%s): %v", logPath, err)
 	}
 	log.Printf("ourchive client %s starting (args: %q)", version, os.Args[1:])
+	go registerURLScheme()
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("panic: %v\n%s", r, debug.Stack())
