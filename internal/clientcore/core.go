@@ -16,8 +16,10 @@
 package clientcore
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"runtime"
 	"strconv"
@@ -259,6 +261,7 @@ func (c *Core) Middleware(next http.Handler) http.Handler {
 			if !canStream(w) {
 				capOpenRange(r, bufferedRangeCap)
 			}
+			restoreBodyLength(r)
 			c.proxy.ServeHTTP(w, r)
 		default:
 			next.ServeHTTP(w, r)
@@ -278,6 +281,32 @@ func sameOriginRequest(r *http.Request) bool {
 	default:
 		return false
 	}
+}
+
+// restoreBodyLength undoes a quirk of WebView2: it gives the app request bodies without a
+// Content-Length, so the request arrives with ContentLength 0 and a body attached. The reverse proxy
+// reads 0 as "no body" and would drop it (the hub then answers "invalid JSON body"). A body that
+// turns out to have data is marked as unknown-length so it is forwarded chunked, without buffering
+// uploads; one that is really empty becomes http.NoBody.
+func restoreBodyLength(r *http.Request) {
+	if r.ContentLength != 0 || r.Body == nil || r.Body == http.NoBody {
+		return
+	}
+	var first [1]byte
+	n, err := io.ReadFull(r.Body, first[:])
+	if n == 0 {
+		if err == io.EOF {
+			_ = r.Body.Close()
+			r.Body = http.NoBody
+		}
+		return
+	}
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(first[:n]), r.Body), r.Body}
+	r.ContentLength = -1
+	r.Header.Del("Content-Length")
 }
 
 // bufferedRangeCap is the largest byte range requested from a hub on behalf of a webview that

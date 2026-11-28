@@ -3,7 +3,10 @@ param(
     [string]$AgentConfig = "",
     # Start from an empty hub (first-run Host Admin setup). The existing ./data folder is moved
     # aside to ./data.bak-<timestamp>, not deleted.
-    [switch]$Fresh
+    [switch]$Fresh,
+    # Build the web UI into web/dist first so the hub itself serves it at http://localhost:8080.
+    # The desktop app's "Sign in with your browser" opens that address, not the Vite dev server.
+    [switch]$BuildWeb
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,6 +24,18 @@ if ($Fresh -and (Test-Path "data")) {
     $backup = "data.bak-" + (Get-Date -Format "yyyyMMdd-HHmmss")
     Move-Item "data" $backup
     Write-Host "Moved existing hub data to ./$backup - starting with an empty hub." -ForegroundColor Yellow
+}
+
+if ($BuildWeb) {
+    Write-Host "Building the web UI into web/dist..." -ForegroundColor Cyan
+    npm.cmd --prefix web run build
+    if ($LASTEXITCODE -ne 0) { Write-Error "Web UI build failed."; exit 1 }
+} else {
+    $dist = "web/dist/index.html"
+    $newest = Get-ChildItem web/src -Recurse -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not (Test-Path $dist) -or ($newest -and $newest.LastWriteTime -gt (Get-Item $dist).LastWriteTime)) {
+        Write-Host "web/dist is missing or older than web/src. The desktop app's browser sign-in opens http://localhost:8080, which only serves the UI from web/dist. Run .\dev.ps1 -BuildWeb to rebuild it." -ForegroundColor Yellow
+    }
 }
 
 $procs = @()

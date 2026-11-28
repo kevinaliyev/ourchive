@@ -142,14 +142,14 @@ func main() {
 	shell.notifier = notifier
 
 	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Name:             "main",
-		Title:            "Ourchive",
-		Width:            1280,
-		Height:           820,
-		MinWidth:         420,
-		MinHeight:        560,
+		Name:  "main",
+		Title: "Ourchive",
+		// Desktop windows start hidden and are sized and shown by windowController once the app
+		// runs and the screen's usable area is known; Wails starts the process DPI-aware.
+		Width:            420,
+		Height:           640,
 		URL:              "/",
-		Hidden:           *background,
+		Hidden:           *background || !isMobile,
 		BackgroundColour: application.NewRGB(17, 17, 19),
 	})
 	shell.window = window
@@ -164,6 +164,11 @@ func main() {
 			shell.ShowWindow()
 		})
 		newTray(app, core, shell, contributor).start()
+
+		windows := &windowController{window: window}
+		app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+			windows.follow(core, shell, *background)
+		})
 	}
 
 	// macOS delivers ourchive:// links as an event; Windows and Linux pass them as the first

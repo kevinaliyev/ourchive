@@ -111,6 +111,10 @@ func newFakeHub(t *testing.T, apiVersion int) *fakeHub {
 		http.SetCookie(w, &http.Cookie{Name: "unrelated", Value: "x"})
 		_, _ = io.WriteString(w, `{"user":{"id":"u1"}}`)
 	})
+	mux.HandleFunc("POST /api/body-echo", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.NewEncoder(w).Encode(map[string]string{"body": string(b)})
+	})
 	mux.HandleFunc("POST /api/auth/logout", func(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", MaxAge: -1})
 		_, _ = io.WriteString(w, `{}`)
@@ -327,6 +331,46 @@ func TestOriginChecksAndBridgeHeader(t *testing.T) {
 	}
 	if resp, data := h.do(t, http.MethodGet, "/", nil, nil); string(data) != "<!doctype html>app" || resp.StatusCode != 200 {
 		t.Fatalf("non-API paths must fall through to the UI assets")
+	}
+}
+
+// WebView2 does not send a Content-Length for fetch() bodies, so the request Wails hands the app has
+// ContentLength 0 with a body attached. httputil.ReverseProxy treats 0 as "no body" and would send
+// an empty request, which the hub rejects as "invalid JSON body".
+func TestProxyKeepsBodiesWhenWebViewOmitsContentLength(t *testing.T) {
+	hub := newFakeHub(t, APIVersion)
+	h := newHarness(t, false)
+	h.addHub(t, hub.URL)
+	handler := h.core.Handler(http.NotFoundHandler())
+
+	send := func(body io.Reader) string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/body-echo", body)
+		req.ContentLength = 0 // what the webview's request looks like
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+		}
+		var out map[string]string
+		_ = json.Unmarshal(rec.Body.Bytes(), &out)
+		return out["body"]
+	}
+
+	payload := `{"identifier":"ru","password":"pw"}`
+	if got := send(io.NopCloser(strings.NewReader(payload))); got != payload {
+		t.Fatalf("hub received %q, want the login body", got)
+	}
+	big := strings.Repeat("x", 3<<20)
+	if got := send(io.NopCloser(strings.NewReader(big))); got != big {
+		t.Fatalf("large body was altered: got %d bytes, want %d", len(got), len(big))
+	}
+	if got := send(http.NoBody); got != "" {
+		t.Fatalf("an empty POST must stay empty, hub received %q", got)
+	}
+	if got := send(io.NopCloser(strings.NewReader(""))); got != "" {
+		t.Fatalf("an empty streamed POST must stay empty, hub received %q", got)
 	}
 }
 
