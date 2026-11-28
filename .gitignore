@@ -10,6 +10,7 @@ ourchive-agent
 
 # Local databases & runtime data
 /data/
+/data.bak-*/
 *.db
 *.db-shm
 *.db-wal

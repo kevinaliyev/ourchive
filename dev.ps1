@@ -1,6 +1,9 @@
 param(
     [switch]$Agent,
-    [string]$AgentConfig = ""
+    [string]$AgentConfig = "",
+    # Start from an empty hub (first-run Host Admin setup). The existing ./data folder is moved
+    # aside to ./data.bak-<timestamp>, not deleted.
+    [switch]$Fresh
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,6 +15,12 @@ if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
         Write-Error "Go was not found on PATH or in C:\Program Files\Go\bin."
         exit 1
     }
+}
+
+if ($Fresh -and (Test-Path "data")) {
+    $backup = "data.bak-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+    Move-Item "data" $backup
+    Write-Host "Moved existing hub data to ./$backup - starting with an empty hub." -ForegroundColor Yellow
 }
 
 $procs = @()
