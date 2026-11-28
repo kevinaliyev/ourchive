@@ -67,6 +67,8 @@ type PlatformInfo struct {
 	OS          string `json:"os"`
 	Mobile      bool   `json:"mobile"`
 	Contributor bool   `json:"contributor"`
+	// ContributorNote explains why contributing is unavailable, when it is.
+	ContributorNote string `json:"contributor_note,omitempty"`
 }
 
 // Options configures New.
@@ -81,6 +83,8 @@ type Options struct {
 	Enroll EnrollFunc
 	// Mobile marks iOS/Android builds.
 	Mobile bool
+	// ContributorNote is shown when Agent is nil, e.g. "another agent is already running".
+	ContributorNote string
 	// HTTPClient is used for direct calls to hubs (health, sign-in exchange, downloads).
 	HTTPClient *http.Client
 	// Transport is used by the API proxy. Nil means a clone of http.DefaultTransport.
@@ -268,9 +272,10 @@ func (c *Core) Snapshot() State {
 		ClientVersion: c.opts.Version,
 		APIVersion:    APIVersion,
 		Platform: PlatformInfo{
-			OS:          runtime.GOOS,
-			Mobile:      c.opts.Mobile,
-			Contributor: c.opts.Agent != nil && c.opts.Enroll != nil,
+			OS:              runtime.GOOS,
+			Mobile:          c.opts.Mobile,
+			Contributor:     c.opts.Agent != nil && c.opts.Enroll != nil,
+			ContributorNote: c.opts.ContributorNote,
 		},
 		ActiveHubID: active.ID,
 		Agent:       []agentstatus.HubStatus{},

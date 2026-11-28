@@ -297,6 +297,12 @@ func runDaemon(args []string) {
 		log.Fatalf("no valid hub configurations found in %s", agentcore.HubsDir())
 	}
 
+	lock, err := agentcore.AcquireInstanceLockWait("ourchive-agent", 15*time.Second)
+	if err != nil {
+		log.Fatalf("%v; if the Ourchive desktop app is running it already contributes this computer, so quit it or stop this service (`ourchive-agent service uninstall`)", err)
+	}
+	defer lock.Release()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
