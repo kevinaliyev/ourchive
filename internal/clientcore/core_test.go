@@ -414,6 +414,26 @@ func TestBrowserSignInHandoff(t *testing.T) {
 	}
 }
 
+func TestOpenLinkOnlyShowsTheWindow(t *testing.T) {
+	h := newHarness(t, false)
+	before := len(h.core.Snapshot().Hubs)
+	if err := h.core.HandleDeepLink("ourchive://open?hub=https://evil.example&token=x"); err != nil {
+		t.Fatalf("HandleDeepLink: %v", err)
+	}
+	h.shell.mu.Lock()
+	shown := h.shell.shown
+	h.shell.mu.Unlock()
+	if shown != 1 {
+		t.Fatalf("window shown %d times, want 1", shown)
+	}
+	if got := len(h.core.Snapshot().Hubs); got != before {
+		t.Fatalf("an open link must not add hubs: %d -> %d", before, got)
+	}
+	if h.core.Snapshot().PendingEnrollment != nil {
+		t.Fatal("an open link must not queue an enrollment")
+	}
+}
+
 func TestEnrollmentLinkNeedsConfirmation(t *testing.T) {
 	hub := newFakeHub(t, APIVersion)
 	h := newHarness(t, true)

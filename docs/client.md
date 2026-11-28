@@ -161,6 +161,48 @@ mobile support is still experimental, so treat mobile builds as previews.
 
 ---
 
+## Getting the app from the hub website
+
+The hub's **Contribution** page has an **Ourchive desktop app** card, and the *Connect a contributor
+machine* dialog has the same control. **Open Ourchive app** hands an `ourchive://` link to the
+browser, which opens the app if the OS has it registered. If the page is still in front a moment
+later, the app probably isn't installed, so **Download for \<your OS\>** is highlighted.
+
+Two limits come from the browser, not from Ourchive: a web page can't tell whether an app is
+installed (it only guesses from whether the page lost focus), and it can't run a downloaded file, so
+the user runs the installer themselves. Unsigned builds also trigger SmartScreen on Windows and
+Gatekeeper on macOS until the installers are code-signed.
+
+The hub offers installers from the first of these that has any:
+
+1. **A GitHub release.** Set `OURCHIVE_CLIENT_RELEASE_REPO=owner/repo`. The hub offers the newest
+   *published* (not draft, not pre-release) release whose tag starts with `client-v`, caches the
+   lookup for 10 minutes and keeps serving the last answer if GitHub is unreachable. Only files under
+   that repository's releases are ever offered.
+2. **Files on the hub.** Put installers in `OURCHIVE_DIST_DIR` (default `dist/`) with the names
+   below. The hub serves them from `/downloads/`, like the agent binaries.
+
+| System | File name |
+| --- | --- |
+| Windows | `ourchive-client-windows-amd64.exe` |
+| macOS (Apple silicon) | `ourchive-client-macos-arm64.zip` |
+| Linux | `ourchive-client-linux-amd64.AppImage` |
+
+With neither, the card says the hub doesn't host the app yet.
+
+### Publishing a release
+
+Push a tag such as `client-v0.1.0`. The **Build Ourchive App** workflow builds all three installers
+with the names above and attaches them to a **draft** release. Review it, then publish it. Untick
+**Set as the latest release** when you do: the agent's install commands use `releases/latest`, and a
+client-only release has no agent files.
+
+### Trying it without a release
+
+Build the app (see below), copy the installer from `client/bin/` into the hub's `dist/` folder under
+the name from the table, and open the Contribution page on a hub started from that folder. The card
+then offers that file as the download.
+
 ## Building
 
 Prerequisites: Go 1.26, Node 22, and the [Wails v3 platform dependencies](https://v3.wails.io/getting-started/installation)

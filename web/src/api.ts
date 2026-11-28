@@ -174,6 +174,24 @@ export interface NodeView {
   created_at: string;
 }
 
+/** One desktop-app installer the hub can offer. `url` may be a path on this hub or an absolute URL. */
+export interface ClientDownloadAsset {
+  os: "windows" | "macos" | "linux";
+  arch: string;
+  label: string;
+  filename: string;
+  url: string;
+  size?: number;
+}
+
+export interface ClientDownloadInfo {
+  /** Where the installers come from: a published release, files on this hub, or nowhere yet. */
+  source: "release" | "hub" | "none";
+  version?: string;
+  release_url?: string;
+  assets: ClientDownloadAsset[];
+}
+
 export interface EnrollTokenResponse {
   token: string;
   expires_at: string;
@@ -352,6 +370,8 @@ export const api = {
     request<{ user: User }>("/api/auth/setup", { method: "POST", body: JSON.stringify(body) }),
   login: (body: { identifier: string; password: string }) =>
     request<{ user: User }>("/api/auth/login", { method: "POST", body: JSON.stringify(body) }),
+  /** Where to download the desktop app (newest published client release, or installers on this hub). */
+  getClientDownload: () => request<ClientDownloadInfo>("/api/client/download"),
   /** Desktop-app browser sign-in: returns the ourchive:// link that hands a one-time code to the app. */
   authorizeClient: (challenge: string, state: string) =>
     request<{ redirect_url: string }>("/api/auth/client/authorize", {

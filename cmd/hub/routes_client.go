@@ -9,6 +9,7 @@ import (
 
 	"github.com/ourchive/ourchive/internal/audit"
 	"github.com/ourchive/ourchive/internal/auth"
+	"github.com/ourchive/ourchive/internal/clientdist"
 	"github.com/ourchive/ourchive/internal/handoff"
 )
 
@@ -33,9 +34,20 @@ func (h *hubApp) registerClientRoutes(appMux *http.ServeMux) {
 	if h.clientHandoff == nil {
 		h.clientHandoff = handoff.NewStore(handoff.DefaultTTL)
 	}
+	if h.clientDist == nil {
+		h.clientDist = clientdist.New(clientdist.Options{DistDir: h.distDir})
+	}
 	authSvc := h.authSvc
 	auditSvc := h.auditSvc
 	store := h.clientHandoff
+
+	// Where to download the desktop app: the newest client release of the configured GitHub
+	// repository, else installers placed in this hub's dist directory. The website uses it for the
+	// "Get the app" buttons; it never needs to know which source answered.
+	appMux.HandleFunc("GET /api/client/download", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "private, max-age=60")
+		writeJSON(w, http.StatusOK, h.clientDist.Resolve(r.Context()))
+	}))
 
 	appMux.HandleFunc("POST /api/auth/client/authorize", authSvc.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {

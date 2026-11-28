@@ -120,6 +120,11 @@ func (c *Core) HandleDeepLink(raw string) error {
 		return c.completeSignIn(q.Get("state"), q.Get("code"))
 	case "enroll":
 		return c.queueEnrollment(q.Get("hub"), q.Get("token"), q.Get("name"))
+	case "open":
+		// The website's "Open app" button. It only brings the window forward: it carries no
+		// parameters and never adds a hub, signs in or changes anything.
+		c.shell.ShowWindow()
+		return nil
 	default:
 		return fmt.Errorf("unsupported ourchive:// action %q", action)
 	}

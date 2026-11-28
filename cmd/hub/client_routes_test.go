@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ourchive/ourchive/internal/auth"
+	"github.com/ourchive/ourchive/internal/clientdist"
 	"github.com/ourchive/ourchive/internal/handoff"
 )
 
@@ -122,5 +125,75 @@ func TestHealthReportsClientAPIVersion(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &res)
 	if res.APIVersion != clientAPIVersion || clientAPIVersion < 1 {
 		t.Fatalf("api_version = %d, want %d", res.APIVersion, clientAPIVersion)
+	}
+}
+
+func TestClientDownloadEndpoint(t *testing.T) {
+	ctx := context.Background()
+	app, h := setupTestHub(t)
+	user, err := app.authSvc.SetupHostAdmin(ctx, "ru@example.com", "ru", "Ru", "password1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := makeSessionCookie(t, app.authSvc, user.ID)
+
+	if rec := doReq(t, h, http.MethodGet, "/api/client/download", nil, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous: got %d, want 401", rec.Code)
+	}
+
+	type response struct {
+		Source string `json:"source"`
+		Assets []struct {
+			OS  string `json:"os"`
+			URL string `json:"url"`
+		} `json:"assets"`
+	}
+	get := func() response {
+		t.Helper()
+		rec := doReq(t, h, http.MethodGet, "/api/client/download", cookie, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
+		}
+		var res response
+		if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+
+	// Nothing hosted yet: the UI gets an explicit "none" and an empty list, not null.
+	if res := get(); res.Source != "none" || res.Assets == nil || len(res.Assets) != 0 {
+		t.Fatalf("empty hub: %+v", res)
+	}
+	if !strings.Contains(doReq(t, h, http.MethodGet, "/api/client/download", cookie, nil).Body.String(), `"assets":[]`) {
+		t.Fatal("assets must serialize as [] so the UI can map over it")
+	}
+
+	// Installers dropped in the dist dir are offered and served from /downloads.
+	dist := t.TempDir()
+	app.distDir = dist
+	app.clientDist = clientdist.New(clientdist.Options{DistDir: dist})
+	for name, body := range map[string]string{
+		"ourchive-client-windows-amd64.exe": "MZ-installer",
+		"ourchive-agent-windows-amd64.exe":  "agent",
+		"secret.txt":                        "nope",
+	} {
+		if err := os.WriteFile(filepath.Join(dist, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res := get()
+	if res.Source != "hub" || len(res.Assets) != 1 || res.Assets[0].OS != "windows" ||
+		res.Assets[0].URL != "/downloads/ourchive-client-windows-amd64.exe" {
+		t.Fatalf("hub installers: %+v", res)
+	}
+	if rec := doReq(t, h, http.MethodGet, "/downloads/ourchive-client-windows-amd64.exe", nil, nil); rec.Code != http.StatusOK || rec.Body.String() != "MZ-installer" {
+		t.Fatalf("installer download: %d %q", rec.Code, rec.Body.String())
+	}
+	if rec := doReq(t, h, http.MethodGet, "/downloads/ourchive-agent-windows-amd64.exe", nil, nil); rec.Code != http.StatusOK {
+		t.Fatalf("agent download must keep working: %d", rec.Code)
+	}
+	if rec := doReq(t, h, http.MethodGet, "/downloads/secret.txt", nil, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("other files must stay private: %d", rec.Code)
 	}
 }

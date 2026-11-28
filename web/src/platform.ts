@@ -290,6 +290,9 @@ export function clearPendingClientAuth(): void {
   } catch {}
 }
 
+/** Link that just brings the desktop app's window forward (it carries no data and changes nothing). */
+export const openAppLink = "ourchive://open";
+
 /** Link that opens the desktop app and asks it to contribute this machine to the hub. */
 export function enrollDeepLink(token: string, name?: string): string {
   const q = new URLSearchParams({ hub: hubOrigin(), token });

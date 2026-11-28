@@ -17,6 +17,7 @@ import (
 
 	"github.com/ourchive/ourchive/internal/audit"
 	"github.com/ourchive/ourchive/internal/auth"
+	"github.com/ourchive/ourchive/internal/clientdist"
 	"github.com/ourchive/ourchive/internal/db"
 	"github.com/ourchive/ourchive/internal/events"
 	"github.com/ourchive/ourchive/internal/handoff"
@@ -50,6 +51,7 @@ type hubApp struct {
 	authLimiter      *ipRateLimiter
 	shareSvc         *shares.Service
 	clientHandoff    *handoff.Store
+	clientDist       *clientdist.Resolver
 	thumbDir         string
 	webDir           string
 	distDir          string
@@ -79,6 +81,11 @@ func main() {
 	}
 	agentDownloadURL := strings.TrimRight(os.Getenv("OURCHIVE_AGENT_DOWNLOAD_URL"), "/")
 	agentManifestURL := strings.TrimSpace(os.Getenv("OURCHIVE_AGENT_MANIFEST_URL"))
+	clientRepo := strings.TrimSpace(os.Getenv("OURCHIVE_CLIENT_RELEASE_REPO"))
+	if clientRepo != "" && !clientdist.ValidRepo(clientRepo) {
+		log.Printf("ignoring OURCHIVE_CLIENT_RELEASE_REPO=%q: expected owner/repo", clientRepo)
+		clientRepo = ""
+	}
 	_ = os.MkdirAll(thumbDir, 0o755)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -142,6 +149,7 @@ func main() {
 		publicHubURL:     publicHubURL,
 		agentDownloadURL: agentDownloadURL,
 		agentManifestURL: agentManifestURL,
+		clientDist:       clientdist.New(clientdist.Options{Repo: clientRepo, DistDir: distDir}),
 		shareHost:        shareHost,
 		shareBaseURL:     shareBaseURL,
 	}

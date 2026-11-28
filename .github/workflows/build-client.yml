@@ -1,6 +1,10 @@
 name: Build Ourchive App
 
-# Manual for now; tag client-v* to publish installers as a draft release.
+# Manual runs just build. Pushing a client-v* tag also attaches the installers to a DRAFT release
+# (review, then publish it; untick "Set as the latest release" so the agent install URLs that use
+# releases/latest keep working). The hub's "Get the app" button offers the newest published
+# client-v* release when OURCHIVE_CLIENT_RELEASE_REPO=owner/repo is set. The installer file names
+# below must match internal/clientdist.Platforms.
 on:
   workflow_dispatch:
   push:
@@ -67,12 +71,39 @@ jobs:
         env:
           VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('dev-{0}', github.sha) }}
         run: printf 'package main\n\nfunc init() { version = "%s" }\n' "${VERSION#client-}" > version_release.go
+      - name: NSIS (Windows installer)
+        if: runner.os == 'Windows'
+        run: |
+          if ! command -v makensis >/dev/null 2>&1; then choco install nsis -y --no-progress; fi
+          echo "C:\Program Files (x86)\NSIS" >> "$GITHUB_PATH"
       - name: Package
         run: wails3 task package
+      - name: Name the installer for release
+        # One stable file name per platform so the hub can find it without guessing.
+        run: |
+          set -euo pipefail
+          echo "--- bin/ after packaging:"; ls -la bin
+          mkdir -p release
+          case "$RUNNER_OS" in
+            Windows)
+              src=$(find bin -maxdepth 1 -type f -iname '*installer*.exe' | head -n 1)
+              [ -n "$src" ] || src=$(find bin -maxdepth 1 -type f -iname '*.exe' | head -n 1)
+              [ -n "$src" ] || { echo "no .exe found in bin/"; exit 1; }
+              cp "$src" release/ourchive-client-windows-amd64.exe ;;
+            macOS)
+              app=$(find bin -maxdepth 1 -type d -name '*.app' | head -n 1)
+              [ -n "$app" ] || { echo "no .app found in bin/"; exit 1; }
+              ditto -c -k --sequesterRsrc --keepParent "$app" release/ourchive-client-macos-arm64.zip ;;
+            Linux)
+              src=$(find bin -maxdepth 1 -type f -name '*.AppImage' | head -n 1)
+              [ -n "$src" ] || { echo "no .AppImage found in bin/"; exit 1; }
+              cp "$src" release/ourchive-client-linux-amd64.AppImage ;;
+          esac
+          ls -la release
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: client/bin/*
+          path: client/release/*
           if-no-files-found: error
 
   release:
@@ -86,4 +117,5 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
+          make_latest: "false"
           files: dist/**/*

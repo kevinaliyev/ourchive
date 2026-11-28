@@ -7,6 +7,7 @@ import { Check, Copy, Cpu, FilePlus2, FolderOpen, FolderPlus, Lock, Microchip, M
 import { api, EnrollTokenResponse, FolderMount, formatMbps, MemberSummary, NodeView, ShareAccessLevel, ShareUserRule } from "../api";
 import { enrollDeepLink, isClient } from "../platform";
 import { ThisComputerCard } from "./ClientChrome";
+import { GetApp } from "./GetApp";
 import { ModalDialog } from "./ModalDialog";
 
 function vendorClass(name?: string): "hw-amd" | "hw-intel" | "hw-nvidia" | "hw-unknown" {
@@ -263,6 +264,7 @@ export function ContributionView({ nodes, onRefresh }: ContributionViewProps) {
   return (
     <div className="section-stack">
       {isClient && <ThisComputerCard onEnrolled={() => void onRefresh()} />}
+      {!isClient && <GetApp />}
 
       <div className="toolbar-row">
         <div className="toolbar-meta">
@@ -845,12 +847,13 @@ export function ContributionView({ nodes, onRefresh }: ContributionViewProps) {
             </p>
 
             {!isClient && (
-              <div className="user-flyout-meta" style={{ justifyContent: "space-between", flexWrap: "wrap" }}>
-                <span>Have the Ourchive desktop app on this computer? Connect it in one click instead.</span>
-                <a className="btn btn-sm" href={enrollDeepLink(enrollResult.token, machineName.trim() || undefined)}>
-                  <Monitor size={13} strokeWidth={1.6} />
-                  <span>Open in Ourchive app</span>
-                </a>
+              <div className="user-flyout-meta" style={{ display: "block" }}>
+                <GetApp
+                  variant="inline"
+                  href={enrollDeepLink(enrollResult.token, machineName.trim() || undefined)}
+                  openLabel="Open in Ourchive app"
+                  blurb="Have the Ourchive desktop app on this computer? Connect it in one click instead. The app asks you to confirm first."
+                />
               </div>
             )}
 
