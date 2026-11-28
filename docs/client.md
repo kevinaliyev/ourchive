@@ -214,6 +214,7 @@ go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
 
 cd client
 ./scripts/bootstrap-build-assets.sh   # once: generates build/ (installers, Info.plist, icons, ourchive://)
+# Windows PowerShell: .\scripts\bootstrap-build-assets.ps1 (plain `bash` there is often WSL, which cannot see wails3)
 go mod tidy                           # once: writes client/go.sum
 
 wails3 task build                     # builds ../web in client mode, then the app → bin/ourchive

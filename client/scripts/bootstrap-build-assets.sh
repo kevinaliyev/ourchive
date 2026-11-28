@@ -4,7 +4,7 @@
 # Run once after cloning, and again after upgrading Wails. Commit the result.
 #
 #   go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
-#   ./scripts/bootstrap-build-assets.sh
+#   ./scripts/bootstrap-build-assets.sh   (Windows PowerShell: .\scripts\bootstrap-build-assets.ps1)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
