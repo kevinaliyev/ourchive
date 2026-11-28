@@ -72,7 +72,7 @@ type fakeAgent struct {
 	retry []string
 }
 
-func newFakeAgent() *fakeAgent { return &fakeAgent{board: agentstatus.NewBoard()} }
+func newFakeAgent() *fakeAgent                       { return &fakeAgent{board: agentstatus.NewBoard()} }
 func (a *fakeAgent) Status() []agentstatus.HubStatus { return a.board.Snapshot() }
 func (a *fakeAgent) Subscribe() (<-chan []agentstatus.HubStatus, func()) {
 	return a.board.Subscribe()
