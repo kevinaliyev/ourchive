@@ -10,6 +10,7 @@ ourchive-agent
 
 # Local databases & runtime data
 /data/
+/data.bak-*/
 *.db
 *.db-shm
 *.db-wal
@@ -28,3 +29,7 @@ agent.json
 Thumbs.db
 .vscode/
 .idea/
+
+# Local-only docs and assistant notes
+/CLAUDE.md
+/docs/identity-and-devices-design.md

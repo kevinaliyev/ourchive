@@ -82,6 +82,8 @@ git pull && docker compose up -d --build
 For bare-metal Linux (`systemd` + Caddy), environment variables, backups, and S3/R2/Bunny.net Edge Storage, see [docs/deployment.md](docs/deployment.md).
 
 ### 3. Connect a Contributor Machine (No Go Required)
+On a desktop or laptop, install the **Ourchive app** ([docs/client.md](docs/client.md)): it runs in the tray, contributes the computer without a console window, and the hub's *Connect a machine* dialog can hand it an enrollment with one click. For servers and NAS boxes, use the headless agent below.
+
 Generate an enrollment token in **Contribution settings → Connect a machine**, then replace `OWNER/REPO`, `HUB`, and `TOKEN`:
 
 **Windows (PowerShell):**
@@ -113,6 +115,7 @@ Add `--read-only` to `enroll` to enforce local read-only protection on the contr
 | :--- | :--- |
 | [Architecture](docs/architecture.md) | Topology, `WSS + yamux` control plane, WebRTC P2P DataChannels, OPFS/IDB & `.ourchive.part` crash-safe transfers, SSE, migrations |
 | [Deployment](docs/deployment.md) | VPS sizing, DNS, Docker Compose + Caddy, bare-metal `systemd`, environment variables, backups, Edge Storage, relay guardrails |
+| [Desktop App](docs/client.md) | Native client for Windows/macOS/Linux (members-only on mobile), tray + embedded agent, one UI shared with the website, browser sign-in handoff, building |
 | [Contributor Agent](docs/agent.md) | Windows/macOS/Linux installation, CLI flags, multi-hub configs, `os.OpenRoot` confinement, logon service, signed auto-updates |
 | [Media & Doc Converter](docs/converter.md) | 3-tier routing, GPU hardware detection (AMD/NVIDIA/Intel/Apple), full `vert.sh`-parity + document format matrix |
 | [Security Model](docs/security.md) | Owner sovereignty invariants, Argon2id + invites, Passkeys (WebAuthn + Signal API), OIDC PKCE, per-mount group ACLs, audit logs |
@@ -131,15 +134,22 @@ ourchive/
 │   │   ├── routes_vfs.go           # VFS proxy, WebP thumbnails, tags, WebRTC SDP signaling
 │   │   ├── routes_shares.go        # Share links API & sticky broadcasts
 │   │   ├── routes_compute.go       # 3-tier converter GPU compute proxy & job history
+│   │   ├── routes_client.go        # Desktop-app browser sign-in handoff (PKCE one-time codes)
 │   │   └── routes_system.go        # SSE stream (/api/events), health, Hub policy & settings
 │   └── agent/
-│       └── main.go                 # Cross-platform daemon, CLI, multi-hub loop, GPU probe
+│       └── main.go                 # Headless CLI over internal/agentcore (enroll, run, service, update)
+├── client/                         # Desktop app (separate Go module, Wails v3): window, tray, deep links
 ├── internal/
+│   ├── agentcore/                  # Agent engine: enroll, WSS+yamux tunnel, multi-hub Runner, instance lock
+│   ├── agentlog/                   # Per-user log file for the agent and the app
+│   ├── agentstatus/                # Live per-hub connection state for the CLI, tray and UI
 │   ├── audit/                      # Tiered audit logging
 │   ├── auth/                       # Sessions, Argon2id, invites, ACLs, WebAuthn, OIDC
+│   ├── clientcore/                 # Desktop app backend: hub proxy, saved hubs/sessions, /_client bridge
 │   ├── compute/                    # Hardware-accelerated ffmpeg + document/data converter
 │   ├── db/                         # SQLite WAL loader & embedded migrations (001–009)
 │   ├── events/                     # Real-time SSE pub/sub broker
+│   ├── handoff/                    # One-time PKCE codes for the app's browser sign-in
 │   ├── service/                    # Zero-UAC logon service installer (Win/macOS/Linux)
 │   ├── settings/                   # Hub policy, relay caps, OIDC & Edge Storage config
 │   ├── shares/                     # Share links & isolated s. subdomain OpenGraph embeds
@@ -150,6 +160,7 @@ ourchive/
 ├── pkg/protocol/                   # Shared Hub <-> Agent wire structs
 ├── web/src/                        # React 19 + TypeScript + Vite frontend
 │   ├── api.ts, p2p.ts, passkeys.ts, transferCache.ts, converter.ts
+│   ├── platform.ts                 # The only web-vs-app difference (isClient, hubOrigin, bridge)
 │   ├── components/                 # Explorer, Converter, Previewer, Shares, Admin, Dev Console
 │   └── styles/                     # Warm Paper + Graphite tokens & layout styles
 ├── deploy/                         # Caddyfile & systemd unit for bare-metal Linux
@@ -170,6 +181,9 @@ go build ./...
 
 # Type-check and build the Web UI
 npm --prefix web run build
+
+# Desktop app (see docs/client.md for prerequisites)
+(cd client && wails3 task build)
 ```
 
 Cross-platform Agent release binaries:

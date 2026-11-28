@@ -10,6 +10,7 @@ import (
 
 	"github.com/ourchive/ourchive/internal/audit"
 	"github.com/ourchive/ourchive/internal/auth"
+	"github.com/ourchive/ourchive/internal/clientdist"
 	"github.com/ourchive/ourchive/internal/settings"
 	"github.com/ourchive/ourchive/internal/storage"
 )
@@ -21,10 +22,10 @@ func (h *hubApp) registerSystemRoutes(appMux *http.ServeMux) {
 	auditSvc := h.auditSvc
 	eventBus := h.eventBus
 	shareHost := h.shareHost
-	distDir := h.distDir
 
 	// --- Self-Hosted Agent Binary Downloads (/downloads/*) ---
-	// Serves cross-platform ourchive-agent binaries and manifest.json from OURCHIVE_DIST_DIR
+	// Serves cross-platform ourchive-agent binaries, desktop app installers (ourchive-client-*) and
+	// manifest.json from OURCHIVE_DIST_DIR
 	// so contributors can install via PowerShell/curl directly from this Hub without needing
 	// GitHub Releases. Set OURCHIVE_AGENT_DOWNLOAD_URL later to switch to official signed releases.
 	appMux.HandleFunc("GET /downloads/{filename}", func(w http.ResponseWriter, r *http.Request) {
@@ -33,11 +34,11 @@ func (h *hubApp) registerSystemRoutes(appMux *http.ServeMux) {
 			writeError(w, http.StatusBadRequest, "invalid filename")
 			return
 		}
-		if name != "manifest.json" && !strings.HasPrefix(name, "ourchive-agent-") {
+		if name != "manifest.json" && !strings.HasPrefix(name, "ourchive-agent-") && !strings.HasPrefix(name, clientdist.FilePrefix) {
 			writeError(w, http.StatusNotFound, "file not found")
 			return
 		}
-		fullPath := filepath.Join(distDir, name)
+		fullPath := filepath.Join(h.distDir, name)
 		info, err := os.Stat(fullPath)
 		if err != nil || info.IsDir() {
 			writeError(w, http.StatusNotFound, "binary not available on hub (run scripts/build-agent or set OURCHIVE_AGENT_DOWNLOAD_URL)")
@@ -62,11 +63,12 @@ func (h *hubApp) registerSystemRoutes(appMux *http.ServeMux) {
 	// --- Health ---
 	appMux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, healthResponse{
-			Status:    "ok",
-			Version:   "0.3.0",
-			HubName:   h.hubName,
-			ShareHost: shareHost,
-			Time:      time.Now().UTC().Format(time.RFC3339),
+			Status:     "ok",
+			Version:    "0.3.0",
+			APIVersion: clientAPIVersion,
+			HubName:    h.hubName,
+			ShareHost:  shareHost,
+			Time:       time.Now().UTC().Format(time.RFC3339),
 		})
 	})
 

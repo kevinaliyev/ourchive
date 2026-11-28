@@ -62,11 +62,18 @@ A lightweight, headless cross-platform daemon (Windows, macOS, Linux) that conne
 - **Compute Runner** (`internal/compute/`): Detects discrete GPUs (AMD AMF/VAAPI, NVIDIA NVENC, Intel QSV, Apple VideoToolbox) and executes `ffmpeg` media conversions plus LibreOffice/Pandoc/pure-Go document conversions.
 - **Multi-Hub Isolation**: Stores one JSON config per Hub under `$HOME/.config/ourchive/hubs/<hub>.json`.
 
+The engine lives in `internal/agentcore` (enrollment, tunnel, and a `Runner` that keeps every hub connected and publishes per-hub state through `internal/agentstatus`). `cmd/agent` is a thin CLI over it, and the desktop app embeds the same `Runner`. A per-user lock (`~/.config/ourchive/agent.lock`) keeps the two from both contributing the same machine.
+
 ### 3. Web Client (`web/src/`)
-A React 19 + TypeScript + Vite single-page application.
+A React 19 + TypeScript + Vite single-page application, built two ways from one codebase: served by the Hub (`npm run build`) and bundled into the desktop app (`npm run build:client`). `web/src/platform.ts` holds every difference between the two.
 
 - **Transfer Engine** (`web/src/p2p.ts`, `web/src/transferCache.ts`): Attempts direct WebRTC P2P first for downloads, uploads, and `.zip` archives; falls back to Hub HTTP relay (subject to Host Admin relay guardrails) only if strict corporate/symmetric NAT blocks direct ICE candidates.
 - **Local Converter** (`web/src/converter.ts`): Runs pure-TypeScript and Canvas conversions directly in the browser when no Agent compute node is available.
+
+---
+
+### 4. Desktop App (`client/`, `internal/clientcore/`)
+A Wails v3 native shell around the bundled web UI, with the contributor agent in the same process. `internal/clientcore` reverse-proxies the UI's `/api` calls to the active hub with that hub's stored session, and serves a small `/_client` bridge for hub switching, browser sign-in (`internal/handoff`, PKCE), native downloads and agent control. See [client.md](client.md).
 
 ---
 

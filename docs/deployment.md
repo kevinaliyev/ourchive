@@ -103,6 +103,7 @@ sqlite3 data/ourchive.db ".backup 'data/ourchive-backup-$(date +%F).db'"
 | `OURCHIVE_HUB_NAME` | *(hostname of `OURCHIVE_PUBLIC_URL`)* | Display name shown in the top-right active Hub status monitor |
 | `OURCHIVE_AGENT_DOWNLOAD_URL` | *(empty)* | Optional override for official signed Agent releases (e.g. GitHub Releases); defaults to `<OURCHIVE_PUBLIC_URL>/downloads` when unset |
 | `OURCHIVE_AGENT_MANIFEST_URL` | *(empty)* | Optional override for the auto-update `manifest.json` URL |
+| `OURCHIVE_CLIENT_RELEASE_REPO` | *(empty)* | `owner/repo` whose newest published `client-v*` release provides the desktop app downloads shown on the Contribution page. When unset, installers named `ourchive-client-*` in `OURCHIVE_DIST_DIR` are offered instead. See [Client](client.md#getting-the-app-from-the-hub-website) |
 | `OURCHIVE_SHARE_HOST` | `s.localhost` | Hostname routed to the isolated share handler |
 | `OURCHIVE_SHARE_URL` | `http://s.localhost:8080` | Base URL used when generating share links |
 

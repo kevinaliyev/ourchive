@@ -133,7 +133,7 @@ func generateWebPThumb(ctx context.Context, ffmpegPath, inputPath string, isVide
 			"-f", "webp",
 			"pipe:1",
 		)
-		cmd := exec.CommandContext(ctx, ffmpegPath, args...)
+		cmd := command(ctx, ffmpegPath, args...)
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		if err := cmd.Run(); err != nil {

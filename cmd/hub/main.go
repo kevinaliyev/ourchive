@@ -17,8 +17,10 @@ import (
 
 	"github.com/ourchive/ourchive/internal/audit"
 	"github.com/ourchive/ourchive/internal/auth"
+	"github.com/ourchive/ourchive/internal/clientdist"
 	"github.com/ourchive/ourchive/internal/db"
 	"github.com/ourchive/ourchive/internal/events"
+	"github.com/ourchive/ourchive/internal/handoff"
 	"github.com/ourchive/ourchive/internal/settings"
 	"github.com/ourchive/ourchive/internal/shares"
 	"github.com/ourchive/ourchive/internal/tunnel"
@@ -26,26 +28,30 @@ import (
 )
 
 type healthResponse struct {
-	Status    string `json:"status"`
-	Version   string `json:"version"`
-	HubName   string `json:"hub_name"`
-	ShareHost string `json:"share_host"`
-	Time      string `json:"time"`
+	Status  string `json:"status"`
+	Version string `json:"version"`
+	// APIVersion lets the desktop client detect a hub it does not understand.
+	APIVersion int    `json:"api_version"`
+	HubName    string `json:"hub_name"`
+	ShareHost  string `json:"share_host"`
+	Time       string `json:"time"`
 }
 
 // hubApp holds the shared control-plane dependencies used across route modules.
 type hubApp struct {
-	store         *db.Store
-	authSvc       *auth.Service
-	broker        *tunnel.Broker
-	tagStore      *vfs.TagStore
-	settingsStore *settings.Store
-	auditSvc      *audit.Service
-	eventBus      *events.Bus
-	oidcMgr       *auth.OIDCManager
-	passkeyMgr    *auth.PasskeyManager
-	authLimiter   *ipRateLimiter
-	shareSvc      *shares.Service
+	store            *db.Store
+	authSvc          *auth.Service
+	broker           *tunnel.Broker
+	tagStore         *vfs.TagStore
+	settingsStore    *settings.Store
+	auditSvc         *audit.Service
+	eventBus         *events.Bus
+	oidcMgr          *auth.OIDCManager
+	passkeyMgr       *auth.PasskeyManager
+	authLimiter      *ipRateLimiter
+	shareSvc         *shares.Service
+	clientHandoff    *handoff.Store
+	clientDist       *clientdist.Resolver
 	thumbDir         string
 	webDir           string
 	distDir          string
@@ -75,6 +81,11 @@ func main() {
 	}
 	agentDownloadURL := strings.TrimRight(os.Getenv("OURCHIVE_AGENT_DOWNLOAD_URL"), "/")
 	agentManifestURL := strings.TrimSpace(os.Getenv("OURCHIVE_AGENT_MANIFEST_URL"))
+	clientRepo := strings.TrimSpace(os.Getenv("OURCHIVE_CLIENT_RELEASE_REPO"))
+	if clientRepo != "" && !clientdist.ValidRepo(clientRepo) {
+		log.Printf("ignoring OURCHIVE_CLIENT_RELEASE_REPO=%q: expected owner/repo", clientRepo)
+		clientRepo = ""
+	}
 	_ = os.MkdirAll(thumbDir, 0o755)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -120,17 +131,17 @@ func main() {
 	shareSvc.SetAudit(auditSvc)
 
 	hub := &hubApp{
-		store:         store,
-		authSvc:       authSvc,
-		broker:        broker,
-		tagStore:      tagStore,
-		settingsStore: settingsStore,
-		auditSvc:      auditSvc,
-		eventBus:      eventBus,
-		oidcMgr:       oidcMgr,
-		passkeyMgr:    passkeyMgr,
-		authLimiter:   authLimiter,
-		shareSvc:      shareSvc,
+		store:            store,
+		authSvc:          authSvc,
+		broker:           broker,
+		tagStore:         tagStore,
+		settingsStore:    settingsStore,
+		auditSvc:         auditSvc,
+		eventBus:         eventBus,
+		oidcMgr:          oidcMgr,
+		passkeyMgr:       passkeyMgr,
+		authLimiter:      authLimiter,
+		shareSvc:         shareSvc,
 		thumbDir:         thumbDir,
 		webDir:           webDir,
 		distDir:          distDir,
@@ -138,6 +149,7 @@ func main() {
 		publicHubURL:     publicHubURL,
 		agentDownloadURL: agentDownloadURL,
 		agentManifestURL: agentManifestURL,
+		clientDist:       clientdist.New(clientdist.Options{Repo: clientRepo, DistDir: distDir}),
 		shareHost:        shareHost,
 		shareBaseURL:     shareBaseURL,
 	}
@@ -149,6 +161,7 @@ func main() {
 	hub.registerVFSRoutes(appMux)
 	hub.registerShareRoutes(appMux)
 	hub.registerComputeRoutes(appMux)
+	hub.registerClientRoutes(appMux)
 
 	// --- Single-Process Production Web UI Serving (OURCHIVE_WEB_DIR, default: web/dist) ---
 	if info, err := os.Stat(filepath.Join(webDir, "index.html")); err == nil && !info.IsDir() {

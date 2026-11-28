@@ -57,3 +57,28 @@ Every sensitive action (auth events, invite creation/redemption, node enrollment
 - **Host Admin**: Full audit log visibility and filtering across the Hub.
 - **Group Admin**: Scoped visibility limited to their own managed groups.
 - **Regular Members**: No access to other users' audit trails.
+
+---
+
+## Desktop App
+
+The [desktop app](client.md) puts a local proxy and an `ourchive://` handler between the UI and the
+hub. Each has its own safeguards:
+
+- **Sessions stay out of the webview.** The proxy keeps each hub's session in a `0600` state file,
+  adds it to outbound requests and drops `Set-Cookie` from responses.
+- **No cross-origin use of the proxy.** The proxy strips the browser's `Origin`/`Sec-Fetch-*`
+  headers, so the hub's own cross-site check can't see them. The app enforces it instead: requests
+  marked `Sec-Fetch-Site: cross-site` or `same-site` are refused, and proxied responses without a
+  CSP get `default-src 'none'; sandbox`. An HTML file previewed from a hub therefore can't call the
+  hub as the user.
+- **Bridge mutations need a custom header** (`X-Ourchive-Client`), which another origin can't send
+  without a CORS preflight that the bridge never grants. Only `http(s)` links can be opened
+  externally, and downloads only come from the active hub's `/api` or `/downloads` paths.
+- **Browser sign-in uses PKCE.** One-time codes are bound to an S256 challenge, expire after
+  2 minutes, and are burned on the first exchange attempt. The app only accepts an `ourchive://auth`
+  link whose state it issued itself. On the website, the user has to confirm before the code is
+  released.
+- **`ourchive://enroll` never acts by itself.** A hub that a computer contributes to can request any
+  local folder be mounted (subject to `--allow-dir`), so the app shows the hub's address and asks
+  for confirmation. Enrollment started inside the app always targets the active hub.

@@ -6,6 +6,7 @@
  */
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import { AnnouncementKind, api, formatMbps, HealthPayload, NodeView, User } from "../api";
+import { hubHost, hubOrigin } from "../platform";
 
 interface ConsoleLine {
   id: number;
@@ -284,7 +285,7 @@ export function AdminDevConsole({
             expires_in_hours: expiresInHours,
             note: noteParts.join(" "),
           });
-          const link = `${window.location.origin}/?invite=${encodeURIComponent(res.invite.code || "")}`;
+          const link = `${hubOrigin()}/?invite=${encodeURIComponent(res.invite.code || "")}`;
           push("ok", `Created [${role}, uses=${maxUses}] invite key: ${res.invite.code}\nLink: ${link}`);
           break;
         }
@@ -556,7 +557,7 @@ export function AdminDevConsole({
     >
       <div className="dev-console-head">
         <span className="dev-console-title mono">
-          ourchive · {window.location.host}
+          ourchive · {hubHost()}
         </span>
         <span className="dev-console-hint mono">~ / Esc to hide · Tab to autocomplete</span>
       </div>

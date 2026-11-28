@@ -1,0 +1,11 @@
+{
+  "name": "ourchive-client-frontend",
+  "private": true,
+  "description": "Wails looks for a frontend/ package; this one builds ../../web in client mode into ./dist.",
+  "scripts": {
+    "postinstall": "npm --prefix ../../web install",
+    "build": "npm --prefix ../../web run build:client",
+    "build:dev": "npm --prefix ../../web run build:client -- --minify false --sourcemap",
+    "dev": "npm --prefix ../../web run dev:client --"
+  }
+}

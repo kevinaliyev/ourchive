@@ -55,6 +55,12 @@ button, input, select {
   gap: var(--sp-6);
 }
 
+.brand-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
 .brand {
   display: inline-flex;
   align-items: center;
@@ -1039,37 +1045,72 @@ input[type="checkbox"][switch]:focus-visible {
   border: 1px solid var(--border-hairline);
 }
 
-/* Segregated Hubs Strip */
-.hub-strip {
+/* Desktop client: hub switcher (topnav) and client-only surfaces */
+.hub-switcher-wrap {
+  position: relative;
+}
+
+.hub-switcher {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 320px;
+  padding: var(--sp-3);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+}
+
+.hub-row {
   display: flex;
   align-items: center;
-  gap: var(--sp-3);
-  flex-wrap: wrap;
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-surface);
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-xs);
+}
+
+.hub-row[aria-current="true"] {
+  background: var(--bg-canvas);
   border: 1px solid var(--border-hairline);
 }
 
-.hub-strip-label {
-  display: inline-flex;
+.hub-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hub-row-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.hub-row-name,
+.hub-row-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hub-row-name {
+  font-size: 13px;
   font-weight: 500;
+}
+
+.hub-row-url {
+  font-size: 11px;
   color: var(--text-muted);
-  padding-right: 6px;
-  border-right: 1px solid var(--border-hairline);
-}
-
-.hub-pill-wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.hub-pill-wrap a.source-pill {
-  text-decoration: none;
 }
 
 .hub-remove-btn {
@@ -1087,6 +1128,24 @@ input[type="checkbox"][switch]:focus-visible {
 .hub-remove-btn:hover {
   background: var(--status-offline-bg);
   color: var(--status-offline);
+}
+
+.agent-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 8px 10px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-hairline);
+  font-size: 13px;
 }
 
 /* Phase 2: Explorer, Responsive File Table & Slide-Over Inspector */

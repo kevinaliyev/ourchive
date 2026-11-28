@@ -50,7 +50,7 @@ func ProbeCompute() protocol.ComputeCapabilities {
 	caps.Enabled = true
 	caps.FFmpegPath = ffmpegPath
 
-	cmd := exec.Command(ffmpegPath, "-hide_banner", "-encoders")
+	cmd := command(context.Background(), ffmpegPath, "-hide_banner", "-encoders")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
@@ -75,7 +75,7 @@ func ProbeCompute() protocol.ComputeCapabilities {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			testCmd := exec.CommandContext(ctx, ffmpegPath,
+			testCmd := command(ctx, ffmpegPath,
 				"-hide_banner", "-loglevel", "error",
 				"-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.1",
 				"-frames:v", "1",
@@ -107,7 +107,7 @@ $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty
 $gpus = @(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name | Where-Object { $_ -and $_ -notmatch 'Basic Display|Virtual|Parsec|Remote|Meta|Oculus' })
 [Console]::Out.Write((($cpu -replace '\s+',' ').Trim()) + "||" + (($gpus | ForEach-Object { ($_ -replace '\s+',' ').Trim() }) -join ";;"))
 `
-		out, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command", script).Output()
+		out, err := command(ctx, "powershell", "-NoProfile", "-Command", script).Output()
 		if err == nil {
 			parts := strings.SplitN(strings.TrimSpace(string(out)), "||", 2)
 			if len(parts) >= 1 {
@@ -122,10 +122,10 @@ $gpus = @(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty 
 			}
 		}
 	case "darwin":
-		if out, err := exec.CommandContext(ctx, "sysctl", "-n", "machdep.cpu.brand_string").Output(); err == nil {
+		if out, err := command(ctx, "sysctl", "-n", "machdep.cpu.brand_string").Output(); err == nil {
 			cpuModel = strings.TrimSpace(string(out))
 		}
-		if out, err := exec.CommandContext(ctx, "sh", "-c", "system_profiler SPDisplaysDataType | awk -F': ' '/Chipset Model/{print $2}'").Output(); err == nil {
+		if out, err := command(ctx, "sh", "-c", "system_profiler SPDisplaysDataType | awk -F': ' '/Chipset Model/{print $2}'").Output(); err == nil {
 			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 				if line = strings.TrimSpace(line); line != "" {
 					rawGPUs = append(rawGPUs, line)
@@ -143,7 +143,7 @@ $gpus = @(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty 
 				}
 			}
 		}
-		if out, err := exec.CommandContext(ctx, "sh", "-c", "lspci | grep -iE 'vga|3d|display' | cut -d':' -f3-").Output(); err == nil {
+		if out, err := command(ctx, "sh", "-c", "lspci | grep -iE 'vga|3d|display' | cut -d':' -f3-").Output(); err == nil {
 			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 				if line = strings.TrimSpace(line); line != "" {
 					rawGPUs = append(rawGPUs, line)
@@ -210,7 +210,7 @@ func ProbeDurationSeconds(ctx context.Context, inputPath string) float64 {
 	if err != nil {
 		return 0
 	}
-	cmd := exec.CommandContext(ctx, ffprobePath,
+	cmd := command(ctx, ffprobePath,
 		"-v", "error",
 		"-show_entries", "format=duration",
 		"-of", "default=noprint_wrappers=1:nokey=1",
@@ -448,14 +448,14 @@ func (cr *ConvertRunner) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		args, usedEnc = BuildFFmpegArgs(inPath, outPath, format, preset, cr.Caps.HWEncoders, dur)
 
 		var stderr bytes.Buffer
-		cmd := exec.CommandContext(convCtx, cr.Caps.FFmpegPath, args...)
+		cmd := command(convCtx, cr.Caps.FFmpegPath, args...)
 		cmd.Stderr = &stderr
 		if err := cmd.Run(); err != nil {
 			// If a hardware encoder failed mid-run, retry once with software libx264 for video formats.
 			if strings.Contains(usedEnc, "nvenc") || strings.Contains(usedEnc, "amf") || strings.Contains(usedEnc, "qsv") {
 				stderr.Reset()
 				swArgs, swEnc := BuildFFmpegArgs(inPath, outPath, format, preset, nil, dur)
-				swCmd := exec.CommandContext(convCtx, cr.Caps.FFmpegPath, swArgs...)
+				swCmd := command(convCtx, cr.Caps.FFmpegPath, swArgs...)
 				swCmd.Stderr = &stderr
 				if swErr := swCmd.Run(); swErr != nil {
 					writeJSONErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("ffmpeg failed: %s", trimErr(stderr.String(), swErr)))
