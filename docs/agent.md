@@ -1,5 +1,7 @@
 # Contributor Agent Guide
 
+> **On a desktop or laptop, prefer the [Ourchive app](client.md).** It embeds this same agent, runs in the tray instead of a console window, and shows connection problems as notifications with a Retry button. Use `ourchive-agent` for servers, NAS boxes and headless machines. Only one of the two can contribute a computer at a time; they share a per-user lock and the same hub configs.
+
 The **Ourchive Agent** (`ourchive-agent`) is a single-binary headless daemon for **Windows**, **macOS**, and **Linux**. It connects outbound over WebSocket (`WSS + yamux`) to one or more Ourchive Hubs behind home NAT—no port forwarding, UPnP, or admin privileges required.
 
 ---
@@ -84,6 +86,8 @@ All `ourchive-agent run` output (connections, config pushes, and errors) is writ
 - **Linux**: `$XDG_STATE_HOME/ourchive/logs/agent.log` (default `~/.local/state/ourchive/logs/agent.log`)
 
 Run `ourchive-agent logs` to print the log path and recent entries.
+
+`run` refuses to start while another agent (another `ourchive-agent run`, or the desktop app) holds `~/.config/ourchive/agent.lock`. It waits up to 15 seconds first, so self-update restarts don't trip it.
 
 By default, each enrolled Hub stops retrying after **5 consecutive failed attempts** (`--max-retries 5`; pass `--max-retries 0` for unlimited retries). When running in an interactive terminal and all Hubs fail, the shell stays open so you can **retry (`r`)**, **print recent logs (`l`)**, or **exit (`q`)**.
 
